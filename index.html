@@ -437,7 +437,10 @@ async function loadData(){
       S.endDate=todayISO(); S.activeQuick="";
     }
   }catch(e){
-    S.error="Erro ao carregar dados do Google Sheets: "+e.message;
+    const msg=String(e&&e.message||e);
+    S.error=/failed to fetch|networkerror|load failed/i.test(msg)
+      ? `Não foi possível ler a planilha (${msg}). Confira no Google Sheets: Compartilhar → Acesso geral → "Qualquer pessoa com o link" → Leitor. Depois clique em ↻ Recarregar.`
+      : "Erro ao carregar dados do Google Sheets: "+msg;
     console.error(e);
   }
   S.loading=false;
@@ -772,7 +775,6 @@ function renderPrincipal(){
     </div>
     <div class="filters">${toggleGroup("Temperatura",TEMP_OPTS,temp,"setPrincipalTemp")}</div>
     ${S.error?`<div class="err">⚠️ ${S.error}</div>`:""}
-    ${colsNotice()}
 
     <div class="blk-title" style="margin-top:4px"><span class="dot" style="background:${CHART_INV}"></span>Visão geral</div>
     <div class="g4">
@@ -1069,7 +1071,6 @@ function renderMetricasTrafego(){
     </div>
     <div class="filters">${toggleGroup("Tipo",TIPO_OPTS,tipo,"setMetricasTipo")}${toggleGroup("Temperatura",TEMP_OPTS,temp,"setMetricasTemp")}</div>
     ${S.error?`<div class="err">⚠️ ${S.error}</div>`:""}
-    ${colsNotice()}
     <div class="section-lbl" style="margin-top:0">Hoje — ${fDateBR(today)}</div>
     <div class="g4" style="margin-bottom:10px">${cards(hoje)}</div>
     <div class="section-lbl">Últimos 3 dias — ${fDateBR(y3)} a ${fDateBR(y1)}</div>
@@ -1183,37 +1184,39 @@ function renderResumo(){
   const today=todayISO(), yest=yesterdayISO();
   const first=S.dates[0]||CONFIG.planoInicio;
   const blocks=[
-    {key:"tot",title:"📶 Total - Consolidado",txt:"*-> Total*",dateLbl:`${fDateBR(first<CONFIG.planoInicio?first:CONFIG.planoInicio)} a ${fDateBR(today)}`,p:periodPack(null,null),plan:planoAteHoje()},
-    {key:"ontem",title:"⬅️ Ontem",txt:"*Ontem*",dateLbl:fDateBR(yest),p:periodPack(yest,yest),plan:planForDate(yest)},
-    {key:"hoje",title:"⬇️ Hoje",txt:"*Hoje*",dateLbl:fDateBR(today),p:periodPack(today,today),plan:planForDate(today)},
+    {key:"tot",title:"📶 Total - Consolidado",txt:"*-> 📶Total*",dateLbl:`${fDateBR(first<CONFIG.planoInicio?first:CONFIG.planoInicio)} a ${fDateBR(today)}`,p:periodPack(null,null),plan:planoAteHoje()},
+    {key:"ontem",title:"⬅️ Ontem",txt:"*⬅️ Ontem*",dateLbl:fDateBR(yest),p:periodPack(yest,yest),plan:planForDate(yest)},
+    {key:"hoje",title:"⬇️ Hoje",txt:"*⬇️ Hoje*",dateLbl:fDateBR(today),p:periodPack(today,today),plan:planForDate(today)},
   ];
   const fmtRow=(v,k,fmt)=>`${v==null?"—":fmt(v)}${M(k)!=null?`\t${metaEmoji(k,v)} (🎯 ${fmt(M(k))})`:""}`;
   function textBlock(b){
     const {p,plan}=b;
-    return `${b.txt}\t${b.dateLbl}
+    return `${b.txt}${b.key==="tot"?"\t":""}
 
 Investimento total:\t${fBRL(p.total.spend)}\t(plan.: ${fBRL(plan)})
 
-📥 Captação de leads
+📥 Página de captura
 Investimento:\t${fBRL(p.cap.spend)}
 Leads:\t${S.has.leads?fInt(p.cap.leads):"—"}
 Custo por lead:\t${fmtRow(p.cap.cpl,"cpl",fBRL)}
+
 Tx quente:\t${fmtRow(p.cap.quentePct,"quente",fPct)}
 Tx frio:\t${fmtRow(p.cap.frioPct,"frio",fPct)}
+
 CPC:\t${fmtRow(p.cap.cpc,"cpc",fBRL)}
 CTR:\t${fmtRow(p.cap.ctr,"ctr",fPct)}
 CPM:\t${fmtRow(p.cap.cpm,"cpm",fBRL)}
-Connect Rate:\t${fmtRow(p.cap.connectRate,"connectRate",fPct)}
+
 Tx conv. página:\t${fmtRow(p.cap.txConvPg,"txConvPg",fPct)}
+Connect Rate:\t${fmtRow(p.cap.connectRate,"connectRate",fPct)}
+
 
 💬 Tráfego WhatsApp
 Investimento:\t${fBRL(p.wa.spend)}
 Cliques no link:\t${fInt(p.wa.clicks)}
-CPC:\t${fmtRow(p.wa.cpc,"cpcWhats",fBRL)}
-Visualizações da pg:\t${S.has.lpv?fInt(p.wa.lpv):"—"}
-Custo por visualização:\t${fmtRow(p.wa.custoLpv,"custoLpvWhats",fBRL)}`;
+CPC:\t${fmtRow(p.wa.cpc,"cpcWhats",fBRL)}`;
   }
-  const resumoText=`*${CONFIG.nome} - Resumo*\n\n`+blocks.map(textBlock).join("\n---------------------\n");
+  const resumoText=`*${CONFIG.nome} - Resumo*\n\n${blocks[0].dateLbl}\n\n`+blocks.map(textBlock).join("\n---------------------\n");
   el._resumoText=resumoText;
 
   function row(lbl,val,k,raw){
@@ -1237,23 +1240,24 @@ Custo por visualização:\t${fmtRow(p.wa.custoLpv,"custoLpvWhats",fBRL)}`;
         <span style="font-family:'JetBrains Mono',monospace;font-size:13px;color:${plan?statusColor(p.total.spend,plan,true):"var(--text-strong)"}">${fBRL(p.total.spend)}</span>
         <span style="font-size:10px;color:var(--hint)">plan.: ${fBRL(plan)}${plan?` · ${fPct(p.total.spend/plan*100)}`:""}</span>
       </div>
-      ${sub("📥 Captação de leads")}
+      ${sub("📥 Página de captura")}
       ${row("Investimento",fBRL(p.cap.spend))}
       ${row("Leads",S.has.leads?fInt(p.cap.leads):"—")}
       ${row("Custo por lead",fBRLOrDash(p.cap.cpl),"cpl",p.cap.cpl)}
+      <div style="height:8px"></div>
       ${row("Tx quente",fPctOrDash(p.cap.quentePct),"quente",p.cap.quentePct)}
       ${row("Tx frio",fPctOrDash(p.cap.frioPct),"frio",p.cap.frioPct)}
+      <div style="height:8px"></div>
       ${row("CPC",fBRLOrDash(p.cap.cpc),"cpc",p.cap.cpc)}
       ${row("CTR",fPctOrDash(p.cap.ctr),"ctr",p.cap.ctr)}
       ${row("CPM",fBRLOrDash(p.cap.cpm),"cpm",p.cap.cpm)}
-      ${row("Connect Rate",fPctOrDash(p.cap.connectRate),"connectRate",p.cap.connectRate)}
+      <div style="height:8px"></div>
       ${row("Tx conv. página",fPctOrDash(p.cap.txConvPg),"txConvPg",p.cap.txConvPg)}
+      ${row("Connect Rate",fPctOrDash(p.cap.connectRate),"connectRate",p.cap.connectRate)}
       ${sub("💬 Tráfego WhatsApp")}
       ${row("Investimento",fBRL(p.wa.spend))}
       ${row("Cliques no link",fInt(p.wa.clicks))}
       ${row("CPC",fBRLOrDash(p.wa.cpc),"cpcWhats",p.wa.cpc)}
-      ${row("Visualizações da pg",S.has.lpv?fInt(p.wa.lpv):"—")}
-      ${row("Custo por visualização",fBRLOrDash(p.wa.custoLpv),"custoLpvWhats",p.wa.custoLpv)}
     </div>`;
   }
   el.innerHTML=`
@@ -1265,7 +1269,6 @@ Custo por visualização:\t${fmtRow(p.wa.custoLpv,"custoLpvWhats",fBRL)}`;
       <button onclick="copyText(document.getElementById('page-resumo')._resumoText,'.btn-copy-resumo')" class="btn-copy-resumo" style="display:inline-flex;align-items:center;gap:6px;padding:8px 18px;background:rgba(59,130,246,.18);border:1px solid rgba(96,165,250,.35);color:#93c5fd;border-radius:9px;cursor:pointer;font-size:12px;font-weight:600;font-family:'DM Sans',sans-serif">📋 Copiar resumo</button>
     </div>
     ${S.error?`<div class="err">⚠️ ${S.error}</div>`:""}
-    ${colsNotice()}
     <div style="display:grid;grid-template-columns:1fr 420px;gap:20px;align-items:start">
       <div>${blocks.map(block).join("")}</div>
       <div style="background:var(--card);border:1px solid var(--border);border-radius:14px;padding:24px;position:sticky;top:70px">
