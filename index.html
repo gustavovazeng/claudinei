@@ -157,6 +157,7 @@ input[type=date]::-webkit-calendar-picker-indicator{opacity:.4;cursor:pointer;fi
 .blk-title .dot{width:8px;height:8px;border-radius:50%}
 .filters{display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
 .page td.mono{white-space:nowrap}
+.funil-btn,.funil-name{white-space:nowrap}
 .page input{box-sizing:border-box}
 .filters .flbl{font-size:9px;color:var(--hint);text-transform:uppercase;letter-spacing:.08em;font-weight:700;margin-right:2px}
 </style>
@@ -233,6 +234,7 @@ const CONFIG = {
     connectRate:  {val:null, higher:true},  // % (visualizações da pg ÷ cliques)
     txConvPg:     {val:null, higher:true},  // % (leads ÷ visualizações da pg)
     quente:       {val:null, higher:true},  // % leads de público quente
+    morno:        {val:null, higher:true},
     frio:         {val:null, higher:false}, // % leads de público frio
     cpcWhats:     {val:null, higher:false}, // R$ por clique (WhatsApp)
     custoLpvWhats:{val:null, higher:false}, // R$ por visualização da pg (WhatsApp)
@@ -283,12 +285,14 @@ const CHART_CPL  = "#fbbf24";
 const CHART_LEAD = "#34d399";
 const CHART_WA   = "#a78bfa";
 const CHART_PLAN = "#8a96ab";
+const CHART_GAP  = "#f87171";
 
 // ── State ─────────────────────────────────────────────────────────────────
 const S = {
   leads:[],          // Base leads, deduplicada por telefone: {date,ms,nome,phone,quiz,faixa,pontos,grupo,temp,campName,adsetName,adName,placement,utmSource,hasUtm,resp{...},formatoAntigo}
   leadsInfo:{linhas:0,duplicadas:0,semData:0,antigas:0},
-  hasLeadsBase:false, leadsError:null,
+  hasLeadsBase:false, leadsError:null, leadsAll:[],
+  showGap:false, faixaSel:{A:true,B:true,C:true,D:true},
   leadsTemp:"todos", leadsSearch:"", leadsSort:{col:"ms",dir:"desc"},
   rows:[],            // {date,campName,campId,adsetName,adId,adName,igUrl,spend,clicks,impressions,reach,leads,lpv,tipo,temp}
   has:{leads:false,impressions:false,reach:false,lpv:false}, // colunas presentes na planilha
@@ -479,7 +483,7 @@ function parseLeads(table){
     if(k&&vistos.has(k)){info.duplicadas++;continue;}
     if(k)vistos.add(k); leads.push(l);
   }
-  return{leads,info};
+  return{leads,info,all};
 }
 
 // ── Carregamento ──────────────────────────────────────────────────────────
@@ -493,8 +497,8 @@ async function loadData(){
     // Base leads: se falhar, a dash segue com os leads do gerenciador.
     S.hasLeadsBase=false; S.leadsError=null; S.leads=[];
     if(leadsRes&&leadsRes.ok){
-      const {leads,info}=parseLeads(parseCSVText(leadsRes.t));
-      S.leads=leads; S.leadsInfo=info; S.hasLeadsBase=true;
+      const {leads,info,all}=parseLeads(parseCSVText(leadsRes.t));
+      S.leads=leads; S.leadsAll=all; S.leadsInfo=info; S.hasLeadsBase=true;
     }else if(leadsRes){ S.leadsError=String(leadsRes.e&&leadsRes.e.message||leadsRes.e); console.error(leadsRes.e); }
     const table=parseCSVText(metaCsv);
     if(table.length<1) throw new Error(`A aba "${CONFIG.abaMeta}" veio vazia.`);
@@ -646,8 +650,12 @@ function navTo(page){ S.currentPage=page; window.scrollTo(0,0); updatePageVisibi
 function navSub(sub){ S.currentSubPage=sub; window.scrollTo(0,0); updatePageVisibility(); render(); }
 function applyQuickCurrent(k){
   const t=todayISO();
-  const map={tudo:()=>({s:S.dates[0]||t,e:t}),hoje:()=>({s:t,e:t}),ontem:()=>{const y=yesterdayISO();return{s:y,e:y}},
-    "7d":()=>({s:nDaysAgoISO(6),e:t}),"30d":()=>({s:nDaysAgoISO(29),e:t}),mes:()=>({s:firstOfMonthISO(),e:t})};
+  // "Últimos 3/7 dias" seguem o padrão do Gerenciador: terminam ONTEM (sem hoje).
+  const mesPassado=()=>{const d=nowBR();const y=d.getUTCFullYear(),m=d.getUTCMonth();
+    const ini=new Date(Date.UTC(y,m-1,1)),fim=new Date(Date.UTC(y,m,0));return{s:toISODate(ini),e:toISODate(fim)};};
+  const map={hoje:()=>({s:t,e:t}),ontem:()=>{const y=yesterdayISO();return{s:y,e:y}},
+    "3d":()=>({s:nDaysAgoISO(3),e:nDaysAgoISO(1)}),"7d":()=>({s:nDaysAgoISO(7),e:nDaysAgoISO(1)}),
+    mespassado:mesPassado,mes:()=>({s:firstOfMonthISO(),e:t})};
   const r=map[k]?.();if(!r)return;
   S.startDate=r.s;S.endDate=r.e;S.activeQuick=k;render();
 }
@@ -676,8 +684,8 @@ function renderHeader(){
       subEl.innerHTML=SUB_TABS_CAPTACAO.map(([k,lbl])=>`<button class="htab${S.currentSubPage===k?" htab-active":""}" onclick="navSub('${k}')">${lbl}</button>`).join("");
     }else{ subEl.style.display="none"; subEl.innerHTML=""; }
   }
-  const QUICKS=["tudo","hoje","ontem","7d","30d","mes"];
-  const QLABEL={tudo:"Tudo",hoje:"Hoje",ontem:"Ontem","7d":"7 dias","30d":"30 dias",mes:"Este mês"};
+  const QUICKS=["hoje","ontem","3d","7d","mespassado","mes"];
+  const QLABEL={hoje:"Hoje",ontem:"Ontem","3d":"Últimos 3 dias","7d":"Últimos 7 dias",mespassado:"Mês passado",mes:"Este mês"};
   const preEl=document.getElementById("hdr-presets");
   if(preEl)preEl.innerHTML=QUICKS.map(k=>`<button class="btn-pre${S.activeQuick===k?" on":""}" onclick="applyQuickCurrent('${k}')">${QLABEL[k]}</button>`).join("");
   const hs=document.getElementById("hdr-start");if(hs)hs.value=S.startDate||"";
@@ -911,6 +919,13 @@ function drawMultiLine(id,data,series,cssW,cssH){
   });
   xLabels(ctx,data,xP,P.t+cH+18);
 }
+function statusLegend(){
+  return `<div class="status-legend" style="margin:0">
+    <span class="sl"><span class="sl-dot" style="background:#34d399"></span>Dentro do plano</span>
+    <span class="sl"><span class="sl-dot" style="background:#fbbf24"></span>Até 10% abaixo</span>
+    <span class="sl"><span class="sl-dot" style="background:#f87171"></span>Mais de 10% abaixo</span>
+  </div>`;
+}
 function periodSub(){ return S.startDate&&S.endDate?`${fDateBR(S.startDate)} → ${fDateBR(S.endDate)}`:""; }
 function foot(txt){ return `<div class="foot">${CONFIG.nome} · ${txt} · Google Sheets</div>`; }
 
@@ -920,20 +935,64 @@ function dailySeries(start,end,f={}){
   return periodDates(start,end).map(date=>{
     const p=periodPack(date,date,f.temp||"todos");
     return{date,label:fDate(date),tipLabel:`${diaSemana(date)}, ${fDate(date)}`,
-      spend:p.cap.spend,leads:p.cap.leads,cpl:p.cap.cpl,
+      spend:p.cap.spend,leads:p.cap.leads,leadsGer:p.cap.leadsGer,cpl:p.cap.cpl,
       faixaA:p.cap.faixaA??null,faixaB:p.cap.faixaB??null,faixaC:p.cap.faixaC??null,faixaD:p.cap.faixaD??null,quizPct:p.cap.quizPct??null,
       waSpend:p.wa.spend,waClicks:p.wa.clicks,waLpv:p.wa.lpv,waCpc:p.wa.cpc,waCustoLpv:p.wa.custoLpv,
       totalSpend:p.total.spend};
   });
 }
+function toggleGap(){ S.showGap=!S.showGap; renderPrincipal(); }
+function toggleFaixaSel(L){ S.faixaSel[L]=!S.faixaSel[L]; renderPrincipal(); }
+// Barras de leads/dia + linha opcional de GAP % (gerenciador × Base leads), eixo dir.
+function drawBarWithGap(id,data,cssW,cssH,showGap){
+  const ctx=initCanvas(id,cssW,cssH);if(!ctx)return;
+  const P={t:16,r:showGap?50:12,b:28,l:44};
+  const cW=cssW-P.l-P.r,cH=cssH-P.t-P.b;
+  const vals=data.map(d=>d.leads||0);
+  const maxV=Math.max(...vals,1)*1.15;
+  const n=data.length;
+  const barW=Math.max(6,Math.min(36,(cW/Math.max(n,1))*0.6));
+  const xP=i=>P.l+(i+0.5)*cW/Math.max(n,1);
+  const yP=v=>P.t+cH-(v/maxV)*cH;
+  for(let i=0;i<=4;i++){
+    const y=P.t+(i/4)*cH;
+    ctx.strokeStyle=GRID_C;ctx.lineWidth=1;ctx.setLineDash([]);
+    ctx.beginPath();ctx.moveTo(P.l,y);ctx.lineTo(P.l+cW,y);ctx.stroke();
+    ctx.fillStyle=TICK_C;ctx.font="9px 'DM Mono',monospace";ctx.textAlign="right";
+    ctx.fillText(Math.round(maxV-(i/4)*maxV),P.l-4,y+3);
+  }
+  vals.forEach((v,i)=>{
+    const y=yP(v);ctx.fillStyle=CHART_LEAD+"cc";ctx.fillRect(xP(i)-barW/2,y,barW,Math.max(P.t+cH-y,v>0?1:0));
+    if(v>0&&n<=40){ctx.fillStyle="#e8edf6";ctx.font="bold 10px 'DM Mono',monospace";ctx.textAlign="center";ctx.fillText(v,xP(i),y-4);}
+  });
+  if(showGap){
+    const g=data.map(d=>d.gapPct);
+    const vv=g.filter(v=>v!=null);
+    const rMin=Math.min(0,...vv)*1.15, rMax=Math.max(1,...vv)*1.15, span=(rMax-rMin)||1;
+    const yR=v=>P.t+cH-((v-rMin)/span)*cH;
+    for(let i=0;i<=4;i++){ctx.fillStyle=CHART_GAP;ctx.font="9px 'DM Mono',monospace";ctx.textAlign="left";ctx.fillText((rMax-(i/4)*span).toFixed(0)+"%",P.l+cW+4,P.t+(i/4)*cH+3);}
+    if(rMin<0){ctx.strokeStyle="rgba(255,255,255,.15)";ctx.setLineDash([3,3]);ctx.beginPath();ctx.moveTo(P.l,yR(0));ctx.lineTo(P.l+cW,yR(0));ctx.stroke();ctx.setLineDash([]);}
+    drawLineArea(ctx,xP,yR,g,CHART_GAP,false);
+  }
+  xLabels(ctx,data,xP,P.t+cH+18);
+}
 function renderPrincipal(){
   const el=document.getElementById("page-principal");if(!el)return;
   const temp=S.principalTemp;
   const p=periodPack(S.startDate,S.endDate,temp);
-  const daily=dailySeries(S.startDate,S.endDate,{temp});
-  const planPer=planRange(S.startDate>CONFIG.planoInicio?S.startDate:CONFIG.planoInicio,S.endDate<todayISO()?S.endDate:todayISO());
-  const pctPlano=planPer>0?(p.total.spend/planPer)*100:null;
+  const c=p.cap;
+  const daily=dailySeries(S.startDate,S.endDate,{temp}).map(d=>({...d,
+    gapPct:S.hasLeadsBase&&d.leads>0?((d.leadsGer-d.leads)/d.leads)*100:null}));
+  const fimPlano=S.endDate<todayISO()?S.endDate:todayISO();
+  const planPer=planRange(S.startDate>CONFIG.planoInicio?S.startDate:CONFIG.planoInicio,fimPlano);
   const tempLabel=Object.fromEntries(TEMP_OPTS)[temp];
+  const tmap={quente:"Quente",morno:"Morno",frio:"Frio"};
+  const leadsSemDedup=S.hasLeadsBase?S.leadsAll.filter(l=>l.date>=S.startDate&&l.date<=S.endDate&&(temp==="todos"||l.temp===tmap[temp])).length:null;
+  const nClass=S.hasLeadsBase?filterLeads({start:S.startDate,end:S.endDate,temp}).filter(l=>l.temp).length:null;
+  const nTemp=pctv=>pctv==null||nClass==null?"":`${fInt(Math.round(pctv*nClass/100))} de ${fInt(nClass)} classificadas`;
+  const investColor=planPer>0?statusColor(p.total.spend,planPer,false):"var(--text-strong)";
+  const subFx=L=>S.hasLeadsBase?[M("faixa"+L)!=null?`meta ${M("faixa"+L)}%`:"",`${fInt(filterLeads({start:S.startDate,end:S.endDate,temp}).filter(l=>l.faixa===L).length)} leads`].filter(Boolean).join(" · "):"";
+  const kpiPct=(lbl,v,k,sub)=>kpiCard(lbl,fPctOrDash(v),[sub,M(k)!=null?`meta ${M(k)}%`:""].filter(Boolean).join(" · "),M(k)!=null&&v!=null?metaColor(k,v):"var(--text-strong)",false,v,M(k),MH(k));
   const waVis=temp==="todos"||temp==="quente"||p.wa.spend>0;
 
   el.innerHTML=`
@@ -947,61 +1006,57 @@ function renderPrincipal(){
     ${S.error?`<div class="err">⚠️ ${S.error}</div>`:""}
     ${leadsNotice()}
 
-    <div class="blk-title" style="margin-top:4px"><span class="dot" style="background:${CHART_INV}"></span>Visão geral</div>
+    <div class="g3" style="margin-bottom:13px">
+      ${kpiCard("Investimento",fBRL(p.total.spend),`planejado até hoje: ${fBRL(planPer)} · captação ${fBRL(c.spend)} · WhatsApp ${fBRL(p.wa.spend)}`,investColor,false,p.total.spend,planPer||null,false)}
+      ${kpiCard("Leads captados",temLeads()?fInt(c.leads):"—",S.hasLeadsBase?[`${fInt(c.semUtm)} sem UTM`,`${fInt(leadsSemDedup)} leads totais (sem dedup)`,`gerenciador: ${fInt(c.leadsGer)}`].join(" · "):"gerenciador (pixel)")}
+      ${kpiCard("Custo/lead",fBRLOrDash(c.cpl),[M("cpl")!=null?`meta ${fBRL(M("cpl"))}`:"","investimento de captação ÷ leads"].filter(Boolean).join(" · "),M("cpl")!=null&&c.cpl!=null?metaColor("cpl",c.cpl):"var(--text-strong)",false,c.cpl,M("cpl"),false)}
+    </div>
+    ${S.hasLeadsBase?`
+    <div class="g4" style="margin-bottom:13px">
+      ${["A","B","C","D"].map(L=>kpiCard("% Faixa "+L,fPctOrDash(c["faixa"+L]),subFx(L),M("faixa"+L)!=null&&c["faixa"+L]!=null?metaColor("faixa"+L,c["faixa"+L]):"var(--text-strong)",false,c["faixa"+L],M("faixa"+L),MH("faixa"+L))).join("")}
+    </div>`:""}
     <div class="g4">
-      ${kpiCard("Investimento total",fBRL(p.total.spend),`captação ${fBRL(p.cap.spend)} · WhatsApp ${fBRL(p.wa.spend)}`)}
-      ${kpiCard("Planejado no período",fBRL(planPer),`R$ ${CONFIG.planoDiario}/dia · até hoje`)}
-      ${kpiCard("% do planejado",fPctOrDash(pctPlano),"investido ÷ planejado",pctPlano!=null?statusColor(p.total.spend,planPer,true):"var(--text-strong)",false,p.total.spend,planPer||null,true)}
-      ${kpiMeta("CPM geral",p.total.cpm,fBRL,"cpm")}
+      ${S.hasLeadsBase?kpiPct("% Resposta da pesquisa",c.quizPct,"quiz",`${fInt(c.nResp)} de ${fInt(c.nComInfo)}`):kpiMeta("Tx conv. página",c.txConvPg,fPct,"txConvPg")}
+      ${kpiPct("Tx quente",c.quentePct,"quente",nTemp(c.quentePct))}
+      ${kpiPct("Tx morno",c.mornoPct,"morno",nTemp(c.mornoPct))}
+      ${kpiPct("Tx frio",c.frioPct,"frio",nTemp(c.frioPct))}
     </div>
+    <div class="section-lbl" style="margin-top:12px">% Faixa A/B/C/D: calculadas só sobre quem tem faixa. % resposta da pesquisa: só sobre leads com essa informação (os cadastros antigos de 07→11/10 ficam fora). Tx quente/morno/frio saem do público da lead e usam como denominador só as leads classificadas — lead sem UTM fica fora, então quente + morno + frio fecha 100%.</div>
 
-    <div class="blk-title"><span class="dot" style="background:${CHART_LEAD}"></span>Captação de leads</div>
-    <div class="g5">
-      ${kpiCard("Investimento",fBRL(p.cap.spend),"campanhas de leads")}
-      ${kpiCard("Leads",temLeads()?fInt(p.cap.leads):"—",S.hasLeadsBase?`Base leads · gerenciador: ${fInt(p.cap.leadsGer)}${p.cap.semUtm?` · ${fInt(p.cap.semUtm)} sem UTM`:""}`:"gerenciador (pixel)",CHART_LEAD)}
-      ${kpiMeta("Custo por lead",p.cap.cpl,fBRL,"cpl")}
-      ${kpiMeta("Tx quente",p.cap.quentePct,fPct,"quente",`morno ${fPctOrDash(p.cap.mornoPct)}`)}
-      ${kpiMeta("Tx frio",p.cap.frioPct,fPct,"frio")}
-    </div>
-    <div class="g5" style="margin-top:13px">
-      ${kpiMeta("CPC",p.cap.cpc,fBRL,"cpc",`${fInt(p.cap.clicks)} cliques`)}
-      ${kpiMeta("CTR",p.cap.ctr,fPct,"ctr")}
-      ${kpiMeta("CPM",p.cap.cpm,fBRL,"cpm")}
-      ${kpiMeta("Connect Rate",p.cap.connectRate,fPct,"connectRate",`${fInt(p.cap.lpv)} visualiz. pg`)}
-      ${kpiMeta("Tx conv. página",p.cap.txConvPg,fPct,"txConvPg","leads ÷ visualiz. pg")}
-    </div>
-
-    <div class="cc" style="margin-top:14px;position:relative">
+    <div class="cc" style="margin-top:6px;position:relative">
       <div class="ch">
-        <span class="ct">Investimento × Custo por lead (captação)</span>
+        <span class="ct">Investimento × Custo por lead</span>
         <div class="lg">
           <span class="li"><span class="ll" style="background:${CHART_INV}"></span>Invest. (esq.)</span>
           <span class="li"><span class="ll" style="background:${CHART_CPL}"></span>Custo/lead (dir.)</span>
+          ${M("cpl")!=null?`<span class="li"><span class="ll" style="background:${CHART_CPL};opacity:.4"></span>Meta ${fBRL(M("cpl"))}</span>`:""}
         </div>
       </div>
       <div style="position:relative"><canvas id="c-dual"></canvas><div class="tip" id="t-dual"></div></div>
+      <div style="font-size:10px;color:var(--hint);margin-top:8px">Investimento das campanhas de captação; custo/lead = esse investimento ÷ leads da ${leadsFonte()}.</div>
     </div>
+
     <div class="cc" style="margin-top:12px;position:relative">
-      <div class="ch"><span class="ct">Leads por dia</span>
-        <div class="lg"><span class="li"><span class="ld" style="background:${CHART_LEAD}"></span>Leads (${leadsFonte()})</span></div></div>
+      <div class="ch">
+        <span class="ct">Volume de leads</span>
+        <div class="lg">
+          <span class="li"><span class="ld" style="background:${CHART_LEAD}"></span>Leads/dia</span>
+          ${S.showGap?`<span class="li"><span class="ll" style="background:${CHART_GAP}"></span>GAP % (gerenciador × planilha)</span>`:""}
+          ${S.hasLeadsBase?`<button onclick="toggleGap()" style="font-size:10px;padding:3px 10px;border-radius:6px;cursor:pointer;font-family:'DM Sans',sans-serif;font-weight:600;border:1px solid rgba(248,113,113,.4);color:#f87171;background:${S.showGap?"rgba(248,113,113,.18)":"transparent"}">${S.showGap?"✕ GAP":"+ GAP"}</button>`:""}
+        </div>
+      </div>
       <div style="position:relative"><canvas id="c-leads"></canvas><div class="tip" id="t-leads"></div></div>
+      ${S.showGap?`<div style="font-size:10px;color:var(--hint);margin-top:8px">GAP % = (leads do gerenciador − leads da Base leads) ÷ leads da Base leads. Positivo = o gerenciador reportou mais leads do que entraram na planilha.</div>`:""}
     </div>
 
     ${S.hasLeadsBase?`
-    <div class="blk-title"><span class="dot" style="background:${CHART_FAIXA.B}"></span>Qualificação (pesquisa)</div>
-    <div class="g6">
-      ${kpiMeta("Tx resp. pesquisa",p.cap.quizPct,fPct,"quiz",`${fInt(p.cap.nResp)} de ${fInt(p.cap.nComInfo)} leads`)}
-      ${kpiMeta("Faixa A",p.cap.faixaA,fPct,"faixaA")}
-      ${kpiMeta("Faixa B",p.cap.faixaB,fPct,"faixaB")}
-      ${kpiMeta("Faixa C",p.cap.faixaC,fPct,"faixaC")}
-      ${kpiMeta("Faixa D",p.cap.faixaD,fPct,"faixaD")}
-      ${kpiMeta("Tx clique no grupo",p.cap.grupoPct,fPct,"grupo")}
-    </div>
-    <div class="section-lbl" style="margin-top:8px">% de faixa = sobre quem tem faixa (${fInt(p.cap.nComFaixa)} leads). Tx resp. pesquisa e Tx clique no grupo usam só leads com essa informação — os cadastros antigos (07→11/10, sem pesquisa) ficam fora dessas taxas.</div>
-    <div class="cc" style="margin-top:6px;position:relative">
-      <div class="ch"><span class="ct">% Faixa por dia</span>
-        <div class="lg">${["A","B","C","D"].map(L=>`<span class="li"><span class="ll" style="background:${CHART_FAIXA[L]}"></span>Faixa ${L}</span>`).join("")}</div></div>
+    <div class="cc" style="margin-top:12px;position:relative">
+      <div class="ch">
+        <span class="ct">% Faixa por dia — ${tempLabel}</span>
+        <div class="lg">${["A","B","C","D"].map(L=>`<button onclick="toggleFaixaSel('${L}')" style="font-size:10px;padding:3px 10px;border-radius:6px;cursor:pointer;font-family:'DM Sans',sans-serif;font-weight:600;border:1px solid ${CHART_FAIXA[L]}66;color:${S.faixaSel[L]?CHART_FAIXA[L]:"var(--hint)"};background:${S.faixaSel[L]?CHART_FAIXA[L]+"22":"transparent"}">Faixa ${L}</button>`).join("")}</div>
+      </div>
       <div style="position:relative"><canvas id="c-faixa"></canvas><div class="tip" id="t-faixa"></div></div>
+      ${Object.values(S.faixaSel).every(v=>!v)?`<div style="font-size:10px;color:var(--hint);margin-top:8px">Selecione ao menos uma faixa pra ver a linha no gráfico.</div>`:""}
     </div>`:""}
 
     ${waVis?`
@@ -1032,17 +1087,18 @@ function renderPrincipal(){
     if(b1)drawDualInvMetric("c-dual",daily,b1.clientWidth,240,"cpl",M("cpl"),CHART_CPL);
     setupTip("c-dual","t-dual",daily,[{name:"Investimento",color:CHART_INV,key:"spend"},{name:"Leads",color:CHART_LEAD,key:"leads",fmt:fInt},{name:"Custo/lead",color:CHART_CPL,key:"cpl"}],64,62);
     const b2=document.getElementById("c-leads")?.parentElement;
-    if(b2)drawBarSingle("c-leads",daily,"leads",CHART_LEAD,b2.clientWidth,200);
-    setupTip("c-leads","t-leads",daily,[{name:"Leads",color:CHART_LEAD,key:"leads",fmt:fInt},{name:"Custo/lead",color:CHART_CPL,key:"cpl"}],44,12,true);
+    if(b2)drawBarWithGap("c-leads",daily,b2.clientWidth,220,S.showGap);
+    setupTip("c-leads","t-leads",daily,[{name:"Leads",color:CHART_LEAD,key:"leads",fmt:fInt},{name:"Gerenciador",color:"#cbd5e1",key:"leadsGer",fmt:fInt},{name:"GAP",color:CHART_GAP,key:"gapPct",fmt:v=>fPct(v)}],44,S.showGap?50:12,true);
     const b4=document.getElementById("c-faixa")?.parentElement;
     if(b4){
       const dF=daily.filter(d=>d.faixaA!=null||d.faixaB!=null||d.faixaC!=null||d.faixaD!=null);
-      drawMultiLine("c-faixa",dF,["A","B","C","D"].map(L=>({key:"faixa"+L,color:CHART_FAIXA[L]})),b4.clientWidth,220);
-      setupTip("c-faixa","t-faixa",dF,["A","B","C","D"].map(L=>({name:"Faixa "+L,color:CHART_FAIXA[L],key:"faixa"+L,fmt:v=>fPct(v)})),40,12);
+      const sel=["A","B","C","D"].filter(L=>S.faixaSel[L]);
+      drawMultiLine("c-faixa",dF,sel.map(L=>({key:"faixa"+L,color:CHART_FAIXA[L]})),b4.clientWidth,240);
+      setupTip("c-faixa","t-faixa",dF,sel.map(L=>({name:"Faixa "+L,color:CHART_FAIXA[L],key:"faixa"+L,fmt:v=>fPct(v)})),40,12);
     }
     const b3=document.getElementById("c-wa")?.parentElement;
     if(b3){
-      const d3=daily.map(d=>({...d,spend:d.waSpend,waCpcK:d.waCpc}));
+      const d3=daily.map(d=>({...d,spend:d.waSpend}));
       drawDualInvMetric("c-wa",d3,b3.clientWidth,220,"waCpc",M("cpcWhats"),CHART_WA);
       setupTip("c-wa","t-wa",d3,[{name:"Investimento",color:CHART_INV,key:"waSpend"},{name:"Cliques",color:CHART_WA,key:"waClicks",fmt:fInt},{name:"CPC",color:CHART_WA,key:"waCpc"},{name:"Visualiz. pg",color:"#cbd5e1",key:"waLpv",fmt:fInt}],64,62);
     }
@@ -1103,10 +1159,10 @@ function copyAdResumo(){ copyText(document.getElementById("page-anuncios")?._adR
 function renderAnuncios(){
   const el=document.getElementById("page-anuncios");if(!el)return;
   const escJs=s=>String(s).replace(/\\/g,"\\\\").replace(/'/g,"\\'").replace(/"/g,"&quot;");
-  const base=filterRows({start:S.startDate,end:S.endDate,tipo:S.anunciosTipo});
+  const base=filterRows({start:S.startDate,end:S.endDate});
 
   const per={start:S.startDate,end:S.endDate};
-  const leadsTipo=S.anunciosTipo==="whatsapp"?[]:filterLeads(per);
+  const leadsTipo=filterLeads(per);
   const campsAll=groupBy(base,r=>r.campName,rs=>({campName:rs[0].campName,tipo:rs[0].tipo,temp:rs[0].temp,
     ...packOf(rs,leadsTipo.filter(l=>l.campName===rs[0].campName))}));
   // Campanha que aparece na Base leads mas (ainda) não na Base meta: entra com
@@ -1156,9 +1212,9 @@ function renderAnuncios(){
   }
   const td=(v,color)=>`<td class="mono" style="text-align:right${color?";color:"+color:""}">${v}</td>`;
   const tdT=(v)=>`<td class="mono" style="text-align:right;font-weight:700;color:var(--text-strong)">${v}</td>`;
-  const metricCols=isCamp=>`${th("spend","Investimento",isCamp)}${th("leads","Leads",isCamp)}${th("cpl","Custo/lead",isCamp)}${th("clicks","Cliques",isCamp)}${th("cpc","CPC",isCamp)}${th("ctr","CTR",isCamp)}${th("cpm","CPM",isCamp)}${th("lpv","Visualiz. pg",isCamp)}${th("connectRate","Connect",isCamp)}${th("txConvPg","Tx conv. pg",isCamp)}${S.hasLeadsBase?`${th("faixaA","Faixa A",isCamp)}${th("faixaB","Faixa B",isCamp)}${th("faixaC","Faixa C",isCamp)}${th("faixaD","Faixa D",isCamp)}${th("quizPct","% pesquisa",isCamp)}${th("grupoPct","% grupo",isCamp)}`:""}`;
+  const metricCols=isCamp=>`${th("spend","Investimento",isCamp)}${th("leads","Leads",isCamp)}${th("cpl","Custo/lead",isCamp)}${th("cpc","CPC",isCamp)}${th("ctr","CTR",isCamp)}${th("cpm","CPM",isCamp)}${th("connectRate","Connect",isCamp)}${th("txConvPg","Tx conv. pg",isCamp)}${S.hasLeadsBase?`${th("faixaA","Faixa A",isCamp)}${th("faixaB","Faixa B",isCamp)}${th("faixaC","Faixa C",isCamp)}${th("faixaD","Faixa D",isCamp)}${th("quizPct","% pesquisa",isCamp)}${th("grupoPct","% grupo",isCamp)}`:""}`;
   const qualTds=(x,isWa,cell=td)=>S.hasLeadsBase?["faixaA","faixaB","faixaC","faixaD","quizPct","grupoPct"].map(k=>cell(isWa?"—":fPctOrDash(x[k]),isWa||cell!==td?"":metaColor(k==="quizPct"?"quiz":k==="grupoPct"?"grupo":k,x[k]))).join(""):"";
-  const metricTds=(x,isWa)=>`${td(fBRL(x.spend))}${td(isWa||!temLeads()?"—":fInt(x.leads))}${td(isWa?"—":fBRLOrDash(x.cpl),isWa?"":metaColor("cpl",x.cpl))}${td(fInt(x.clicks))}${td(fBRLOrDash(x.cpc))}${td(fPctOrDash(x.ctr))}${td(fBRLOrDash(x.cpm))}${td(S.has.lpv?fInt(x.lpv):"—")}${td(fPctOrDash(x.connectRate))}${td(isWa?"—":fPctOrDash(x.txConvPg))}${qualTds(x,isWa)}`;
+  const metricTds=(x,isWa)=>`${td(fBRL(x.spend))}${td(isWa||!temLeads()?"—":fInt(x.leads))}${td(isWa?"—":fBRLOrDash(x.cpl),isWa?"":metaColor("cpl",x.cpl))}${td(fBRLOrDash(x.cpc))}${td(fPctOrDash(x.ctr))}${td(fBRLOrDash(x.cpm))}${td(fPctOrDash(x.connectRate))}${td(isWa?"—":fPctOrDash(x.txConvPg))}${qualTds(x,isWa)}`;
   const searchBox=(id,fn,val,ph)=>`<div style="margin-bottom:10px"><input id="${id}" oninput="${fn}(this.value)" value="${esc(val)}" placeholder="${ph}" style="width:100%;padding:8px 12px;background:var(--card);border:1px solid var(--border);border-radius:9px;color:var(--text);font-size:12px;font-family:'DM Sans',sans-serif;outline:none"/></div>`;
   const btnClear=(fn,n)=>`<button onclick="${fn}()" style="font-size:10px;padding:3px 9px;border:1px solid rgba(239,68,68,.4);background:rgba(239,68,68,.08);color:#f87171;border-radius:5px;cursor:pointer;font-family:'DM Sans',sans-serif">✕ Limpar seleção (${n})</button>`;
   const totalTipo=campTot;
@@ -1170,14 +1226,11 @@ function renderAnuncios(){
         <div class="hdr-sub">${periodSub()} · ${camps.length} campanhas · ${ads.length} anúncios${campSel?` · filtrado por ${S.selectedCamps.size} campanha(s)`:""}</div>
       </div>
     </div>
-    <div class="filters">${toggleGroup("Tipo",TIPO_OPTS,S.anunciosTipo,"setAnunciosTipo")}</div>
     ${S.error?`<div class="err">⚠️ ${S.error}</div>`:""}
-    <div class="g5" style="margin-bottom:20px">
+    <div class="g3" style="margin-bottom:20px">
       ${kpiCard("Investimento",fBRL(totalTipo.spend),campSel?"campanhas selecionadas":"no período")}
       ${kpiCard("Leads",temLeads()?fInt(totCap.leads):"—","só campanhas de captação")}
       ${kpiMeta("Custo/lead",totCap.cpl,fBRL,"cpl")}
-      ${kpiMeta("CPC",totalTipo.cpc,fBRL,"cpc")}
-      ${kpiMeta("CTR",totalTipo.ctr,fPct,"ctr")}
     </div>
 
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
@@ -1188,23 +1241,21 @@ function renderAnuncios(){
     ${searchBox("busca-campanha","setCampSearch",S.campSearch,"Buscar campanha…")}
     <div class="cc" style="padding:0;overflow:hidden;margin-bottom:22px"><div style="overflow-x:auto">
       <table>
-        <thead><tr><th style="width:36px"></th><th onclick="sortCampanhas('campName')">Campanha</th><th>Tipo</th><th>Temp.</th>${metricCols(true)}</tr></thead>
+        <thead><tr><th style="width:36px"></th><th onclick="sortCampanhas('campName')">Campanha</th>${metricCols(true)}</tr></thead>
         <tbody>
           ${camps.length===0?`<tr><td colspan="20" style="text-align:center;color:var(--hint);padding:20px">Sem dados de campanhas no período</td></tr>`:
           camps.map(c=>{const sel=S.selectedCamps.has(c.campName);const isWa=c.tipo==="whatsapp";
             if(c.semUtmRow)return `<tr style="background:rgba(148,163,184,.04)">
               <td></td><td style="color:var(--muted)">${SEM_UTM} <span style="font-size:10px;color:var(--hint)">(leads sem campanha — ex.: cadastros de 07→11/10)</span></td>
-              <td><span class="tag tag-cap">Captação</span></td><td>${tempTag("")}</td>
-              ${td("—")}${td(fInt(c.leads))}${td("—")}${td("—")}${td("—")}${td("—")}${td("—")}${td("—")}${td("—")}${td("—")}${qualTds(c,false)}</tr>`;
+              ${td("—")}${td(fInt(c.leads))}${td("—")}${td("—")}${td("—")}${td("—")}${td("—")}${td("—")}${qualTds(c,false)}</tr>`;
             return `<tr onclick="toggleCamp('${escJs(c.campName)}')" style="cursor:pointer;background:${sel?"rgba(16,185,129,.1)":"transparent"}">
               <td>${chkBox(sel)}</td>
               <td style="color:${sel?"#10b981":"var(--text)"};font-weight:${sel?600:400}">${esc(c.campName)}</td>
-              <td>${tipoTag(c.tipo)}</td><td>${tempTag(c.temp)}</td>
               ${metricTds(c,isWa)}</tr>`;}).join("")}
         </tbody>
         ${camps.length?`<tfoot><tr style="background:rgba(148,163,184,.10);border-top:2px solid var(--border)">
-          <td></td><td colspan="3" style="font-weight:700;color:var(--text-strong)">${campSel?"TOTAL da seleção":"TOTAL"}</td>
-          ${tdT(fBRL(campTot.spend))}${tdT(temLeads()?fInt(totCap.leads):"—")}${tdT(fBRLOrDash(totCap.cpl))}${tdT(fInt(campTot.clicks))}${tdT(fBRLOrDash(campTot.cpc))}${tdT(fPctOrDash(campTot.ctr))}${tdT(fBRLOrDash(campTot.cpm))}${tdT(S.has.lpv?fInt(campTot.lpv):"—")}${tdT(fPctOrDash(campTot.connectRate))}${tdT(fPctOrDash(totCap.txConvPg))}${qualTds(totCap,false,tdT)}
+          <td></td><td style="font-weight:700;color:var(--text-strong)">${campSel?"TOTAL da seleção":"TOTAL"}</td>
+          ${tdT(fBRL(campTot.spend))}${tdT(temLeads()?fInt(totCap.leads):"—")}${tdT(fBRLOrDash(totCap.cpl))}${tdT(fBRLOrDash(campTot.cpc))}${tdT(fPctOrDash(campTot.ctr))}${tdT(fBRLOrDash(campTot.cpm))}${tdT(fPctOrDash(campTot.connectRate))}${tdT(fPctOrDash(totCap.txConvPg))}${qualTds(totCap,false,tdT)}
         </tr></tfoot>`:""}
       </table>
     </div></div>
@@ -1217,21 +1268,20 @@ function renderAnuncios(){
     ${searchBox("busca-anuncio","setAdSearch",S.adSearch,"Buscar anúncio…")}
     <div class="cc" style="padding:0;overflow:hidden"><div style="overflow-x:auto">
       <table>
-        <thead><tr><th style="width:36px"></th><th onclick="sortAnuncios('adName')">Anúncio</th><th>Tipo</th>${metricCols(false)}<th></th></tr></thead>
+        <thead><tr><th style="width:36px"></th><th onclick="sortAnuncios('adName')">Anúncio</th>${metricCols(false)}<th></th></tr></thead>
         <tbody>
           ${ads.length===0?`<tr><td colspan="21" style="text-align:center;color:var(--hint);padding:20px">Sem dados de anúncios no período</td></tr>`:
           ads.map(a=>{const sel=S.selectedAds.has(a.adName);const isWa=!a.temCap;
             return `<tr onclick="toggleAd('${escJs(a.adName)}')" style="cursor:pointer;background:${sel?"rgba(16,185,129,.1)":"transparent"}">
               <td>${chkBox(sel)}</td>
               <td style="color:${sel?"#10b981":"var(--text)"};font-weight:${sel?600:400};max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(a.adName)}">${esc(a.adName)}${a.nCamps>1?` <span style="color:var(--hint);font-size:10px">(${a.nCamps} camp.)</span>`:""}</td>
-              <td>${a.tipoList.map(tipoTag).join(" ")}</td>
               ${metricTds(a,isWa)}
               <td style="text-align:center" onclick="event.stopPropagation()">${a.igUrl?`<a href="${esc(a.igUrl)}" target="_blank" style="color:#93c5fd;text-decoration:none;font-size:11px">Ver ↗</a>`:"—"}</td>
             </tr>`;}).join("")}
         </tbody>
         ${ads.length?`<tfoot><tr style="background:rgba(148,163,184,.10);border-top:2px solid var(--border)">
-          <td></td><td colspan="2" style="font-weight:700;color:var(--text-strong)">${adSel?"TOTAL da seleção":"TOTAL"}</td>
-          ${tdT(fBRL(adTot.spend))}${tdT(temLeads()?fInt(adTotCap.leads):"—")}${tdT(fBRLOrDash(adTotCap.cpl))}${tdT(fInt(adTot.clicks))}${tdT(fBRLOrDash(adTot.cpc))}${tdT(fPctOrDash(adTot.ctr))}${tdT(fBRLOrDash(adTot.cpm))}${tdT(S.has.lpv?fInt(adTot.lpv):"—")}${tdT(fPctOrDash(adTot.connectRate))}${tdT(fPctOrDash(adTotCap.txConvPg))}${qualTds(adTotCap,false,tdT)}<td></td>
+          <td></td><td style="font-weight:700;color:var(--text-strong)">${adSel?"TOTAL da seleção":"TOTAL"}</td>
+          ${tdT(fBRL(adTot.spend))}${tdT(temLeads()?fInt(adTotCap.leads):"—")}${tdT(fBRLOrDash(adTotCap.cpl))}${tdT(fBRLOrDash(adTot.cpc))}${tdT(fPctOrDash(adTot.ctr))}${tdT(fBRLOrDash(adTot.cpm))}${tdT(fPctOrDash(adTot.connectRate))}${tdT(fPctOrDash(adTotCap.txConvPg))}${qualTds(adTotCap,false,tdT)}<td></td>
         </tr></tfoot>`:""}
       </table>
     </div></div>
@@ -1388,113 +1438,73 @@ function renderLeads(){
       ${distBlock("Posicionamento",ls.filter(l=>l.hasUtm),l=>l.placement,palFn)}
     </div>
 
-    ${faixaTable("Qualidade por campanha",ls,l=>l.campName)}
-    ${faixaTable("Qualidade por anúncio",ls,l=>l.adName)}
-    ${faixaTable("Qualidade por posicionamento",ls.filter(l=>l.hasUtm),l=>l.placement)}
-    ${faixaTable("Qualidade por resposta de O que faz",comPesq,l=>l.resp.faz)}
-
-    <div class="section-lbl">Leads (${fInt(list.length)}${list.length>shown.length?` · mostrando ${shown.length}`:""})</div>
-    <div style="margin-bottom:10px"><input id="busca-lead" oninput="setLeadsSearch(this.value)" value="${esc(S.leadsSearch)}" placeholder="Buscar por nome, campanha, anúncio, faixa…" style="width:100%;padding:8px 12px;background:var(--card);border:1px solid var(--border);border-radius:9px;color:var(--text);font-size:12px;font-family:'DM Sans',sans-serif;outline:none"/></div>
-    <div class="cc" style="padding:0;overflow:hidden"><div style="overflow-x:auto"><table>
-      <thead><tr>${th("ms","Cadastro")}${th("nome","Nome")}${th("faixa","Faixa")}${th("pontos","Pontos",true)}<th>Pesquisa</th><th>Grupo</th>${th("temp","Público")}${th("campName","Campanha")}${th("adName","Anúncio")}${th("placement","Posicionamento")}</tr></thead>
-      <tbody>${shown.map(l=>`<tr>
-        <td class="mono">${fmtMs(l.ms)}</td>
-        <td>${esc(l.nome)}</td>
-        <td>${l.faixa?`<span class="tag" style="background:${CHART_FAIXA[l.faixa]}22;color:${CHART_FAIXA[l.faixa]}">${l.faixa}</span>`:`<span style="color:var(--hint)">—</span>`}</td>
-        <td class="mono" style="text-align:right">${l.pontos==null?"—":fInt(l.pontos)}</td>
-        <td>${sn(l.quiz)}</td><td>${sn(l.grupo)}</td>
-        <td>${tempTag(l.temp)}</td>
-        <td style="color:${l.hasUtm?"var(--text)":"var(--hint)"}">${esc(l.campName)}</td>
-        <td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(l.adName)}">${esc(l.adName)}</td>
-        <td>${esc(l.placement||"—")}</td></tr>`).join("")}</tbody>
-    </table></div></div>
     ${foot("Análise qualificação")}`;
 }
 
 // ── Render: Planejado × Realizado ─────────────────────────────────────────
+// Leads planejados/dia = investimento planejado ÷ meta de CPL (igual ao modelo).
+// Sem meta de CPL (CONFIG.metas.cpl) não há plano de leads → "—".
+function planLeadsForDate(d){ const inv=planForDate(d), cpl=M("cpl"); return inv&&cpl?Math.round(inv/cpl):null; }
 function renderPlanoReal(){
   const el=document.getElementById("page-planoreal");if(!el)return;
   const today=todayISO();
-  const fim=CONFIG.planoFim||today;
-  const lastData=S.dates[S.dates.length-1]||today;
-  const dias=daysBetween(CONFIG.planoInicio,fim>lastData?fim:lastData);
-  let acPlan=0,acReal=0;
+  // Sem data de término: mostra o plano até o fim do mês corrente.
+  const fimMes=(()=>{const d=nowBR();return toISODate(new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth()+1,0)));})();
+  const fim=CONFIG.planoFim||fimMes;
+  const dias=daysBetween(CONFIG.planoInicio,fim);
   const rows=dias.map(d=>{
-    const plan=planForDate(d), isFuture=d>today;
-    const p=periodPack(d,d);
-    const real=isFuture?null:p.total.spend;
-    if(!isFuture){acPlan+=plan;acReal+=real;}
-    return{date:d,label:fDate(d),tipLabel:`${diaSemana(d)}, ${fDate(d)}`,plan,real,cap:p.cap.spend,wa:p.wa.spend,leads:p.cap.leads,cpl:p.cap.cpl,
-      diff:real==null?null:real-plan,pct:real==null||!plan?null:real/plan*100,acPlan,acReal,isToday:d===today,isFuture};
+    const isFuture=d>today;
+    const p=isFuture?null:periodPack(d,d);
+    return{date:d,isToday:d===today,isFuture,plan:planForDate(d),planLeads:planLeadsForDate(d),
+      real:isFuture?null:p.total.spend,leads:isFuture?null:p.cap.leads};
   });
-  const done=rows.filter(r=>!r.isFuture);
-  const totPlan=done.reduce((a,r)=>a+r.plan,0), totReal=done.reduce((a,r)=>a+(r.real||0),0);
-  const totCap=done.reduce((a,r)=>a+r.cap,0), totWa=done.reduce((a,r)=>a+r.wa,0), totLeads=done.reduce((a,r)=>a+r.leads,0);
-  const pct=totPlan>0?totReal/totPlan*100:null;
-  const mediaDia=done.length?totReal/done.length:0;
-  const diffColor=v=>v==null?"var(--hint)":Math.abs(v)<0.005?"var(--text)":v>0?"#fbbf24":"#f87171";
+  const ateHoje=rows.filter(r=>!r.isFuture);
+  const sum=(arr,k)=>arr.reduce((a,r)=>a+(r[k]||0),0);
+  const totPlan=sum(rows,"plan"), totPlanHoje=sum(ateHoje,"plan");
+  const temPlanLeads=rows.some(r=>r.planLeads!=null);
+  const totLeadsPlan=temPlanLeads?sum(rows,"planLeads"):null, totLeadsPlanHoje=temPlanLeads?sum(ateHoje,"planLeads"):null;
+  const totReal=sum(ateHoje,"real"), totLeads=sum(ateHoje,"leads");
+  const cor=(v,m)=>v==null?"var(--hint)":m?statusColor(v,m,true):"var(--text-strong)";
+  const td=(v,c)=>`<td class="mono" style="text-align:right${c?";color:"+c:""}">${v}</td>`;
   el.innerHTML=`
     <div class="hdr" style="margin-bottom:6px">
       <div>
         <div class="hdr-title">Planejado / Realizado</div>
-        <div class="hdr-sub">plano: R$ ${CONFIG.planoDiario}/dia desde ${fDateBR(CONFIG.planoInicio)}${CONFIG.planoFim?` até ${fDateBR(CONFIG.planoFim)}`:" (sem data de término)"} · investimento total (captação + WhatsApp) · atualizado em: ${S.updated||"—"}</div>
+        <div class="hdr-sub">R$ ${CONFIG.planoDiario}/dia desde ${fDateBR(CONFIG.planoInicio)} · investimento total (captação + WhatsApp) · leads da ${leadsFonte()} · atualizado em: ${S.updated||"—"}</div>
       </div>
+      <div style="display:flex;align-items:center;gap:16px">${statusLegend()}</div>
     </div>
     ${S.error?`<div class="err">⚠️ ${S.error}</div>`:""}
-    <div class="g5" style="margin-bottom:16px">
-      ${kpiCard("Planejado até hoje",fBRL(totPlan),`${done.length} dia(s) × R$ ${CONFIG.planoDiario}`)}
-      ${kpiCard("Realizado até hoje",fBRL(totReal),`captação ${fBRL(totCap)} · WhatsApp ${fBRL(totWa)}`,pct!=null?statusColor(totReal,totPlan,true):"var(--text-strong)",false,totReal,totPlan||null,true)}
-      ${kpiCard("% do planejado",fPctOrDash(pct),`diferença ${fBRL(totReal-totPlan)}`,pct!=null?statusColor(totReal,totPlan,true):"var(--text-strong)")}
-      ${kpiCard("Média por dia",fBRL(mediaDia),`plano R$ ${CONFIG.planoDiario}/dia`)}
-      ${kpiCard("Leads (captação)",temLeads()?fInt(totLeads):"—",`CPL ${fBRLOrDash(temLeads()&&totLeads?totCap/totLeads:null)}`,CHART_LEAD)}
-    </div>
-    <div class="cc" style="position:relative;margin-bottom:16px">
-      <div class="ch"><span class="ct">Investimento por dia — planejado × realizado</span>
-        <div class="lg"><span class="li"><span class="ll" style="background:${CHART_PLAN};height:0;border-top:2px dashed ${CHART_PLAN}"></span>Planejado</span>
-        <span class="li"><span class="ld" style="background:#34d399"></span>≥ plano</span><span class="li"><span class="ld" style="background:#fbbf24"></span>até 10% abaixo</span><span class="li"><span class="ld" style="background:#f87171"></span>mais de 10% abaixo</span></div></div>
-      <div style="position:relative"><canvas id="c-plan"></canvas><div class="tip" id="t-plan"></div></div>
+    <div class="section-lbl" style="margin-top:6px">Captação — detalhe diário</div>
+    <div class="g4" style="margin-bottom:20px">
+      ${kpiCard("Investimento planejado",fBRL(totPlan),`${rows.length} dias`)}
+      ${kpiCard("Investimento realizado",fBRL(totReal),`Investimento planejado até hoje: ${fBRL(totPlanHoje)}`,cor(totReal,totPlanHoje),false,totReal,totPlanHoje||null,true)}
+      ${kpiCard("Leads planejados",totLeadsPlan==null?"—":fInt(totLeadsPlan),totLeadsPlan==null?"sem meta de CPL definida":`${rows.length} dias`)}
+      ${kpiCard("Leads realizados",temLeads()?fInt(totLeads):"—",totLeadsPlanHoje==null?"":`Leads planejados até hoje: ${fInt(totLeadsPlanHoje)}`,cor(totLeads,totLeadsPlanHoje),false,totLeads,totLeadsPlanHoje,true)}
     </div>
     <div class="cc" style="padding:0;overflow:hidden"><div style="overflow-x:auto">
       <table>
-        <thead><tr><th>Data</th><th style="text-align:right">Planejado</th><th style="text-align:right">Realizado</th><th style="text-align:right">Diferença</th><th style="text-align:right">% do plano</th>
-          <th style="text-align:right">Captação</th><th style="text-align:right">WhatsApp</th><th style="text-align:right">Leads</th><th style="text-align:right">CPL</th>
-          <th style="text-align:right">Acum. planejado</th><th style="text-align:right">Acum. realizado</th></tr></thead>
+        <thead><tr><th>Data</th><th style="text-align:right">Investimento planejado</th><th style="text-align:right">Investimento realizado</th><th style="text-align:right">Leads planejados</th><th style="text-align:right">Leads realizados</th></tr></thead>
         <tbody>
-          ${rows.map(r=>`<tr style="background:${r.isToday?"rgba(59,130,246,.08)":"transparent"};${r.isFuture?"opacity:.45":""}">
-            <td class="mono">${diaSemana(r.date)}, ${fDate(r.date)}${r.isToday?` <span class="tag" style="background:rgba(59,130,246,.2);color:#93c5fd">hoje</span>`:""}</td>
-            <td class="mono" style="text-align:right">${fBRL(r.plan)}</td>
-            <td class="mono" style="text-align:right;color:${r.real==null?"var(--hint)":statusColor(r.real,r.plan||null,true)}">${fBRLOrDash(r.real)}</td>
-            <td class="mono" style="text-align:right;color:${diffColor(r.diff)}">${r.diff==null?"—":(r.diff>0?"+":"")+fBRL(r.diff)}</td>
-            <td class="mono" style="text-align:right">${fPctOrDash(r.pct)}</td>
-            <td class="mono" style="text-align:right">${r.isFuture?"—":fBRL(r.cap)}</td>
-            <td class="mono" style="text-align:right">${r.isFuture?"—":fBRL(r.wa)}</td>
-            <td class="mono" style="text-align:right">${r.isFuture||!temLeads()?"—":fInt(r.leads)}</td>
-            <td class="mono" style="text-align:right">${r.isFuture?"—":fBRLOrDash(r.cpl)}</td>
-            <td class="mono" style="text-align:right;color:var(--muted)">${r.isFuture?"—":fBRL(r.acPlan)}</td>
-            <td class="mono" style="text-align:right;color:var(--muted)">${r.isFuture?"—":fBRL(r.acReal)}</td>
+          ${rows.map(r=>`<tr style="background:${r.isToday?"rgba(59,130,246,.08)":"transparent"}">
+            <td class="mono">${diaSemana(r.date)}, ${fDate(r.date)}${r.isToday?" 👈":""}</td>
+            ${td(fBRL(r.plan))}
+            ${td(r.real==null?"—":fBRL(r.real),cor(r.real,r.plan))}
+            ${td(r.planLeads==null?"—":fInt(r.planLeads))}
+            ${td(r.leads==null||!temLeads()?"—":fInt(r.leads),r.planLeads==null?(r.leads==null?"var(--hint)":""):cor(r.leads,r.planLeads))}
           </tr>`).join("")}
         </tbody>
         <tfoot><tr style="border-top:2px solid var(--border-h)">
-          <td style="font-weight:700;color:var(--text-strong)">Total até hoje</td>
+          <td style="font-weight:700;color:var(--text-strong)">Total</td>
           <td class="mono" style="text-align:right;font-weight:700">${fBRL(totPlan)}</td>
           <td class="mono" style="text-align:right;font-weight:700">${fBRL(totReal)}</td>
-          <td class="mono" style="text-align:right;font-weight:700;color:${diffColor(totReal-totPlan)}">${(totReal-totPlan>0?"+":"")+fBRL(totReal-totPlan)}</td>
-          <td class="mono" style="text-align:right;font-weight:700">${fPctOrDash(pct)}</td>
-          <td class="mono" style="text-align:right;font-weight:700">${fBRL(totCap)}</td>
-          <td class="mono" style="text-align:right;font-weight:700">${fBRL(totWa)}</td>
+          <td class="mono" style="text-align:right;font-weight:700">${totLeadsPlan==null?"—":fInt(totLeadsPlan)}</td>
           <td class="mono" style="text-align:right;font-weight:700">${temLeads()?fInt(totLeads):"—"}</td>
-          <td class="mono" style="text-align:right;font-weight:700">${fBRLOrDash(temLeads()&&totLeads?totCap/totLeads:null)}</td>
-          <td></td><td></td>
         </tr></tfoot>
       </table>
     </div></div>
     ${foot("Planejado × Realizado")}`;
-  requestAnimationFrame(()=>{
-    const box=document.getElementById("c-plan")?.parentElement; if(!box)return;
-    const data=rows.filter(r=>!r.isFuture);
-    drawPlanReal("c-plan",data,box.clientWidth,220);
-    setupTip("c-plan","t-plan",data,[{name:"Planejado",color:CHART_PLAN,key:"plan"},{name:"Realizado",color:CHART_INV,key:"real"},{name:"Captação",color:CHART_LEAD,key:"cap"},{name:"WhatsApp",color:CHART_WA,key:"wa"}],56,12,true);
-  });
+  requestAnimationFrame(()=>{ const h=[...el.querySelectorAll("tbody tr")].find(tr=>tr.textContent.includes("👈")); });
 }
 
 // ── Render: Resumo diário ─────────────────────────────────────────────────
