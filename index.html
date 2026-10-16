@@ -187,6 +187,7 @@ input[type=date]::-webkit-calendar-picker-indicator{opacity:.4;cursor:pointer;fi
   <div id="page-principal" class="page active"></div>
   <div id="page-anuncios"  class="page"></div>
   <div id="page-metricas"  class="page"></div>
+  <div id="page-leads"     class="page"></div>
   <div id="page-planoreal" class="page"></div>
   <div id="page-resumo"    class="page"></div>
 </div>
@@ -217,6 +218,7 @@ const CONFIG = {
   // Planilha "Base dash" — precisa estar como "qualquer pessoa com o link: leitor".
   sheetId:"1PKdOd1MRwXdDeLNHFxkgdtXQmB6Vc4cBhbJYjE6xkps",
   abaMeta:"Base meta",
+  abaLeads:"Base leads", // leads reais (cadastro + pesquisa + UTMs). null = usa os leads do gerenciador
   // Planejamento: verba diária fixa, a partir de planoInicio. planoFim=null
   // significa "segue até hoje" (live semanal, sem data de término).
   planoDiario:145,
@@ -234,6 +236,12 @@ const CONFIG = {
     frio:         {val:null, higher:false}, // % leads de público frio
     cpcWhats:     {val:null, higher:false}, // R$ por clique (WhatsApp)
     custoLpvWhats:{val:null, higher:false}, // R$ por visualização da pg (WhatsApp)
+    faixaA:       {val:null, higher:true},  // % faixa A (entre quem tem faixa)
+    faixaB:       {val:null, higher:true},
+    faixaC:       {val:null, higher:false},
+    faixaD:       {val:null, higher:false},
+    quiz:         {val:null, higher:true},  // % que terminou a pesquisa
+    grupo:        {val:null, higher:true},  // % que clicou no grupo
   },
 };
 const M = k => (CONFIG.metas[k]||{}).val ?? null;
@@ -278,6 +286,10 @@ const CHART_PLAN = "#8a96ab";
 
 // ── State ─────────────────────────────────────────────────────────────────
 const S = {
+  leads:[],          // Base leads, deduplicada por telefone: {date,ms,nome,phone,quiz,faixa,pontos,grupo,temp,campName,adsetName,adName,placement,utmSource,hasUtm,resp{...},formatoAntigo}
+  leadsInfo:{linhas:0,duplicadas:0,semData:0,antigas:0},
+  hasLeadsBase:false, leadsError:null,
+  leadsTemp:"todos", leadsSearch:"", leadsSort:{col:"ms",dir:"desc"},
   rows:[],            // {date,campName,campId,adsetName,adId,adName,igUrl,spend,clicks,impressions,reach,leads,lpv,tipo,temp}
   has:{leads:false,impressions:false,reach:false,lpv:false}, // colunas presentes na planilha
   dates:[],           // datas com dado (ordenadas)
@@ -400,11 +412,91 @@ const TIPO_LABEL={captacao:"Captação",whatsapp:"WhatsApp"};
 function tipoTag(t){ return `<span class="tag ${t==="whatsapp"?"tag-wa":"tag-cap"}">${TIPO_LABEL[t]}</span>`; }
 function tempTag(t){ if(!t)return `<span style="color:var(--hint)">—</span>`; return `<span class="tag ${t==="Quente"?"tag-q":t==="Morno"?"tag-m":"tag-f"}">${t}</span>`; }
 
+// ── Base leads ────────────────────────────────────────────────────────────
+// A aba tem DOIS formatos misturados:
+//  • completo (a partir de 14/10): Cadastro "16/10, 13:26", pesquisa, faixa, UTMs;
+//  • antigo (07→11/10): id | nome | (vazio) | telefone | data ISO UTC — sem
+//    pesquisa nem UTM. As colunas ficam "deslocadas": o telefone cai em
+//    "Terminou pesquisa" e a data em "Faixa". Essas linhas contam como lead
+//    "sem UTM" (fora das métricas de faixa/pesquisa).
+const LEAD_COLS={cadastro:"Cadastro",nome:"Nome",whats:"WhatsApp",pesquisa:"Terminou pesquisa",faixa:"Faixa",pontos:"Pontos",
+  faz:"O que faz",animais:"Animais/mês",terra:"Terra",capital:"Capital",dor:"Maior dor",comprou:"Já comprou produto",
+  grupo:"Clicou no grupo",publico:"Público",campanha:"Campanha",conjunto:"Conjunto",anuncio:"Anúncio",posic:"Posicionamento",origem:"Origem completa"};
+// Perguntas da pesquisa (ordem em que aparecem na aba Análise qualificação)
+const PERGUNTAS=[["faz","O que faz"],["animais","Animais/mês"],["terra","Terra"],["capital","Capital"],["dor","Maior dor"],["comprou","Já comprou produto"]];
+const SEM_UTM="Sem UTM";
+function msToISO(ms){ const d=new Date(ms);return `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,"0")}-${String(d.getUTCDate()).padStart(2,"0")}`; }
+// "16/10, 13:26" (sem ano) · "16/10/2026 13:26:00" · ISO. Sem ano → ano atual,
+// ou o anterior se a data cairia no futuro (virada de ano).
+function parseCadastro(s){
+  s=String(s||"").trim(); if(!s)return null;
+  if(/^\d{4}-\d{2}-\d{2}T/.test(s)){ const ms=Date.parse(s); return isNaN(ms)?null:{ms,date:msToISO(ms-3*3600e3)}; }
+  const m=s.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?[,\s]*(?:(\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+  if(!m)return null;
+  const da=+m[1],mo=+m[2];
+  let y=m[3]?(m[3].length===2?2000+ +m[3]:+m[3]):nowBR().getUTCFullYear();
+  let ms=Date.UTC(y,mo-1,da,+(m[4]||0),+(m[5]||0),+(m[6]||0));
+  if(!m[3]&&ms>nowBR().getTime()+2*86400e3){ y--; ms=Date.UTC(y,mo-1,da,+(m[4]||0),+(m[5]||0),+(m[6]||0)); }
+  return isNaN(ms)?null:{ms,date:msToISO(ms)};
+}
+function simNao(v){ v=String(v||"").trim().toLowerCase(); return v==="sim"?true:(v==="não"||v==="nao")?false:null; }
+function utmParam(url,key){ const m=String(url||"").match(new RegExp("(?:^|[?&])"+key+"=([^&]*)")); return m?decodeURIComponent(m[1].replace(/\+/g," ")):""; }
+function parseLeads(table){
+  const info={linhas:0,duplicadas:0,semData:0,antigas:0};
+  if(table.length<2)return{leads:[],info};
+  const h=table[0].map(x=>x.trim());
+  const ix={}; for(const k in LEAD_COLS)ix[k]=h.indexOf(LEAD_COLS[k]);
+  const all=[];
+  for(const r of table.slice(1)){
+    const g=k=>ix[k]>=0?(r[ix[k]]||"").trim():"";
+    info.linhas++;
+    const faixaRaw=g("faixa");
+    // Formato antigo: data ISO na coluna "Faixa", telefone em "Terminou pesquisa"
+    if(/^\d{4}-\d{2}-\d{2}T/.test(faixaRaw)){
+      const d=parseCadastro(faixaRaw); if(!d){info.semData++;continue;}
+      info.antigas++;
+      all.push({...d,nome:g("nome"),phone:(g("pesquisa")||g("whats")).replace(/\D/g,""),quiz:null,faixa:"",pontos:null,grupo:null,
+        temp:"",campName:SEM_UTM,adsetName:"",adName:SEM_UTM,placement:"",utmSource:"",hasUtm:false,resp:{},formatoAntigo:true});
+      continue;
+    }
+    const d=parseCadastro(g("cadastro")); if(!d){info.semData++;continue;}
+    const campName=g("campanha"), origem=g("origem");
+    const pub=g("publico").toLowerCase();
+    const fx=g("faixa").toUpperCase();
+    const resp={}; for(const [k] of PERGUNTAS)resp[k]=g(k);
+    all.push({...d,nome:g("nome"),phone:g("whats").replace(/\D/g,""),
+      quiz:simNao(g("pesquisa")),faixa:/^[A-D]$/.test(fx)?fx:"",pontos:g("pontos")===""?null:parseNum(g("pontos")),
+      grupo:simNao(g("grupo")),
+      temp:pub==="quente"?"Quente":pub==="morno"?"Morno":pub==="frio"?"Frio":campaignTemperature(campName),
+      campName:campName||SEM_UTM,adsetName:g("conjunto"),adName:g("anuncio")||SEM_UTM,placement:g("posic"),
+      utmSource:utmParam(origem,"utm_source"),hasUtm:!!campName,resp,formatoAntigo:false});
+  }
+  // Dedup por telefone (últimos 11 dígitos): vale o 1º cadastro da pessoa.
+  all.sort((a,b)=>a.ms-b.ms);
+  const vistos=new Set(), leads=[];
+  for(const l of all){
+    const k=l.phone?l.phone.slice(-11):null;
+    if(k&&vistos.has(k)){info.duplicadas++;continue;}
+    if(k)vistos.add(k); leads.push(l);
+  }
+  return{leads,info};
+}
+
 // ── Carregamento ──────────────────────────────────────────────────────────
 async function loadData(){
   S.loading=true; S.error=null; render();
   try{
-    const table=parseCSVText(await fetchSheetCSV(CONFIG.abaMeta));
+    const [metaCsv,leadsRes]=await Promise.all([
+      fetchSheetCSV(CONFIG.abaMeta),
+      CONFIG.abaLeads?fetchSheetCSV(CONFIG.abaLeads).then(t=>({ok:true,t}),e=>({ok:false,e})):Promise.resolve(null),
+    ]);
+    // Base leads: se falhar, a dash segue com os leads do gerenciador.
+    S.hasLeadsBase=false; S.leadsError=null; S.leads=[];
+    if(leadsRes&&leadsRes.ok){
+      const {leads,info}=parseLeads(parseCSVText(leadsRes.t));
+      S.leads=leads; S.leadsInfo=info; S.hasLeadsBase=true;
+    }else if(leadsRes){ S.leadsError=String(leadsRes.e&&leadsRes.e.message||leadsRes.e); console.error(leadsRes.e); }
+    const table=parseCSVText(metaCsv);
     if(table.length<1) throw new Error(`A aba "${CONFIG.abaMeta}" veio vazia.`);
     const headers=table[0].map(h=>h.trim());
     const idx={};
@@ -422,14 +514,14 @@ async function loadData(){
         clicks:parseNum(get(r,"clicks")),
         impressions:parseNum(get(r,"impressions")),
         reach:parseNum(get(r,"reach")),
-        leads:parseNum(get(r,"leads")),
+        leadsGer:parseNum(get(r,"leads")), // leads do gerenciador (pixel) — só referência
         lpv:parseNum(get(r,"lpv")),
         tipo:campaignTipo(campName),
         temp:campaignTemperature(campName),
       });
     }
     S.rows=rows;
-    S.dates=[...new Set(rows.map(r=>r.date))].sort();
+    S.dates=[...new Set([...rows.map(r=>r.date),...S.leads.map(l=>l.date)])].sort();
     S.updated=S.dates.length?fDateBR(S.dates[S.dates.length-1]):"—";
     if(!S.startDate){
       S.startDate=S.dates[0]||todayISO();
@@ -458,30 +550,68 @@ function filterRows(f={}){
     (!f.camps||f.camps.size===0||f.camps.has(r.campName)));
 }
 function sumRows(rows){
-  const t={spend:0,clicks:0,impressions:0,reach:0,leads:0,lpv:0};
-  for(const r of rows){t.spend+=r.spend;t.clicks+=r.clicks;t.impressions+=r.impressions;t.reach+=r.reach;t.leads+=r.leads;t.lpv+=r.lpv;}
+  const t={spend:0,clicks:0,impressions:0,reach:0,leads:0,leadsGer:0,lpv:0};
+  for(const r of rows){t.spend+=r.spend;t.clicks+=r.clicks;t.impressions+=r.impressions;t.reach+=r.reach;t.leadsGer+=r.leadsGer;t.lpv+=r.lpv;}
+  t.leads=t.leadsGer; // sem Base leads, vale o gerenciador
   return t;
+}
+// Leads da Base leads no recorte. f: {start,end,temp,camps:Set,ads:Set,adName,tipo}
+function filterLeads(f={}){
+  if(f.tipo==="whatsapp")return [];
+  const tmap={quente:"Quente",morno:"Morno",frio:"Frio"};
+  return S.leads.filter(l=>
+    (f.start==null||l.date>=f.start)&&(f.end==null||l.date<=f.end)&&
+    (!f.temp||f.temp==="todos"||l.temp===tmap[f.temp])&&
+    (!f.camps||f.camps.size===0||f.camps.has(l.campName))&&
+    (!f.ads||f.ads.size===0||f.ads.has(l.adName)));
+}
+// Qualidade de um conjunto de leads. Cada taxa usa como denominador só quem
+// TEM aquela informação (leads do formato antigo ficam fora).
+function qualityOf(ls){
+  const comInfo=ls.filter(l=>l.quiz!==null), resp=comInfo.filter(l=>l.quiz);
+  const comFaixa=ls.filter(l=>l.faixa);
+  const comGrupo=ls.filter(l=>l.grupo!==null);
+  const pct=(n,d)=>d?n/d*100:null;
+  const fx=L=>pct(comFaixa.filter(l=>l.faixa===L).length,comFaixa.length);
+  const pts=ls.filter(l=>l.pontos!=null);
+  const by={Quente:0,Morno:0,Frio:0}; for(const l of ls) if(by[l.temp]!=null)by[l.temp]++;
+  const tt=by.Quente+by.Morno+by.Frio;
+  return{
+    nLeads:ls.length, nComInfo:comInfo.length, nResp:resp.length, nComFaixa:comFaixa.length, semUtm:ls.filter(l=>!l.hasUtm).length,
+    quizPct:pct(resp.length,comInfo.length),
+    faixaA:fx("A"),faixaB:fx("B"),faixaC:fx("C"),faixaD:fx("D"),
+    grupoPct:pct(comGrupo.filter(l=>l.grupo).length,comGrupo.length),
+    pontosMedio:pts.length?pts.reduce((a,l)=>a+l.pontos,0)/pts.length:null,
+    quentePct:pct(by.Quente,tt),mornoPct:pct(by.Morno,tt),frioPct:pct(by.Frio,tt),
+  };
+}
+// Soma das linhas de mídia + leads reais do mesmo recorte (quando houver Base leads).
+function packOf(rows,ls){
+  const t=sumRows(rows);
+  if(S.hasLeadsBase)t.leads=ls.length;
+  const out=derive(t);
+  return S.hasLeadsBase?{...out,...qualityOf(ls)}:{...out,...tempPctsGer(rows)};
 }
 // Deriva as taxas de um somatório. CPL só faz sentido em linhas de captação
 // (a campanha de WhatsApp não gera lead) — quem chama decide o recorte.
 function derive(t){
   const has=S.has;
   return {...t,
-    cpl:   has.leads&&t.leads>0?t.spend/t.leads:null,
+    cpl:   (S.hasLeadsBase||has.leads)&&t.leads>0&&t.spend>0?t.spend/t.leads:null,
     cpc:   t.clicks>0?t.spend/t.clicks:null,
     ctr:   has.impressions&&t.impressions>0?(t.clicks/t.impressions)*100:null,
     cpm:   has.impressions&&t.impressions>0?(t.spend/t.impressions)*1000:null,
     freq:  has.reach&&t.reach>0?t.impressions/t.reach:null,
     connectRate: has.lpv&&t.clicks>0&&t.lpv>0?(t.lpv/t.clicks)*100:null,
-    txConvPg:    has.leads&&has.lpv&&t.lpv>0?(t.leads/t.lpv)*100:null,
+    txConvPg:    (S.hasLeadsBase||has.leads)&&has.lpv&&t.lpv>0?(t.leads/t.lpv)*100:null,
     custoLpv:    has.lpv&&t.lpv>0?t.spend/t.lpv:null,
   };
 }
-function metrics(f){ return derive(sumRows(filterRows(f))); }
-// % de leads por temperatura — denominador = leads de campanhas classificadas.
-function tempPcts(rows){
+function metrics(f){ return packOf(filterRows(f),filterLeads(f)); }
+// Fallback sem Base leads: % por temperatura com os leads do gerenciador.
+function tempPctsGer(rows){
   const by={Quente:0,Morno:0,Frio:0};
-  for(const r of rows) if(r.tipo==="captacao"&&by[r.temp]!=null) by[r.temp]+=r.leads;
+  for(const r of rows) if(r.tipo==="captacao"&&by[r.temp]!=null) by[r.temp]+=r.leadsGer;
   const tot=by.Quente+by.Morno+by.Frio;
   if(!tot)return{quentePct:null,mornoPct:null,frioPct:null};
   return{quentePct:by.Quente/tot*100,mornoPct:by.Morno/tot*100,frioPct:by.Frio/tot*100};
@@ -490,7 +620,8 @@ function tempPcts(rows){
 function periodPack(start,end,temp="todos"){
   const all=filterRows({start,end,temp});
   const cap=all.filter(r=>r.tipo==="captacao"), wa=all.filter(r=>r.tipo==="whatsapp");
-  return{ total:derive(sumRows(all)), cap:{...derive(sumRows(cap)),...tempPcts(cap)}, wa:derive(sumRows(wa)) };
+  const ls=filterLeads({start,end,temp});
+  return{ total:packOf(all,ls), cap:packOf(cap,ls), wa:{...derive({...sumRows(wa),leads:0}),leads:0} };
 }
 function periodDates(start,end){ return S.dates.filter(d=>d>=start&&d<=end); }
 
@@ -531,7 +662,7 @@ function preservaFoco(fn){
   if(f.s!=null){try{el.setSelectionRange(f.s,f.e);}catch(_){}}
 }
 
-const SUB_TABS_CAPTACAO=[["principal","⊞ Principal"],["anuncios","◈ Campanhas e anúncios"],["metricas","📶 Métricas do Tráfego"]];
+const SUB_TABS_CAPTACAO=[["principal","⊞ Principal"],["anuncios","◈ Campanhas e anúncios"],["metricas","📶 Métricas do Tráfego"],["leads","🎯 Análise qualificação"]];
 function renderHeader(){
   const wrap=document.getElementById("funil-wrap");
   if(wrap) wrap.innerHTML=`<div class="funil-btn" style="cursor:default"><span class="funil-dot"></span>
@@ -742,6 +873,44 @@ function colsNotice(){
   if(!S.has.lpv)falta.push(`<b>Action Landing Page View</b> — sem ela Connect Rate e Tx conv. pg ficam "—"`);
   return falta.length?`<div class="notice">⚠️ A aba "${CONFIG.abaMeta}" está sem a(s) coluna(s): ${falta.join("; ")}.</div>`:"";
 }
+function temLeads(){ return S.hasLeadsBase||S.has.leads; }
+function leadsFonte(){ return S.hasLeadsBase?"Base leads":"gerenciador (pixel)"; }
+const CHART_FAIXA={A:"#34d399",B:"#60a5fa",C:"#fbbf24",D:"#f87171"};
+function barRow(lbl,n,total,color){
+  const pct=total>0?(n/total)*100:0;
+  return `<div class="bar-row">
+    <span style="color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(lbl)}">${esc(lbl)}</span>
+    <div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:${color}"></div></div>
+    <span class="mono" style="text-align:right;color:var(--text-strong);white-space:nowrap">${n} <span style="color:var(--hint)">(${pct.toFixed(0)}%)</span></span>
+  </div>`;
+}
+function leadsNotice(){
+  if(S.leadsError)return `<div class="notice">⚠️ Não consegui ler a aba "${CONFIG.abaLeads}" (${esc(S.leadsError)}). Leads e CPL estão vindo do gerenciador.</div>`;
+  return "";
+}
+// Linhas de % (0-100) — séries diárias de faixa. null quebra a linha.
+function drawMultiLine(id,data,series,cssW,cssH){
+  const ctx=initCanvas(id,cssW,cssH);if(!ctx)return;
+  const P={t:14,r:12,b:28,l:40};
+  const cW=cssW-P.l-P.r,cH=cssH-P.t-P.b;
+  const n=data.length;
+  const xP=i=>P.l+(n>1?i/(n-1):0.5)*cW;
+  const yP=v=>P.t+cH-(Math.max(0,Math.min(100,v))/100)*cH;
+  for(let i=0;i<=4;i++){
+    const y=P.t+(i/4)*cH;
+    ctx.strokeStyle=GRID_C;ctx.lineWidth=1;ctx.setLineDash([]);
+    ctx.beginPath();ctx.moveTo(P.l,y);ctx.lineTo(P.l+cW,y);ctx.stroke();
+    ctx.fillStyle=TICK_C;ctx.font="9px 'DM Mono',monospace";ctx.textAlign="right";
+    ctx.fillText((100-i*25)+"%",P.l-4,y+3);
+  }
+  series.forEach(s=>{
+    const vals=data.map(d=>d[s.key]);
+    drawLineArea(ctx,xP,yP,vals,s.color,false);
+    if(n<=31){ctx.font="9px 'DM Mono',monospace";ctx.textAlign="center";ctx.fillStyle=s.color;
+      vals.forEach((v,i)=>{if(v!=null)ctx.fillText(v.toFixed(0)+"%",xP(i),yP(v)-6);});}
+  });
+  xLabels(ctx,data,xP,P.t+cH+18);
+}
 function periodSub(){ return S.startDate&&S.endDate?`${fDateBR(S.startDate)} → ${fDateBR(S.endDate)}`:""; }
 function foot(txt){ return `<div class="foot">${CONFIG.nome} · ${txt} · Google Sheets</div>`; }
 
@@ -752,6 +921,7 @@ function dailySeries(start,end,f={}){
     const p=periodPack(date,date,f.temp||"todos");
     return{date,label:fDate(date),tipLabel:`${diaSemana(date)}, ${fDate(date)}`,
       spend:p.cap.spend,leads:p.cap.leads,cpl:p.cap.cpl,
+      faixaA:p.cap.faixaA??null,faixaB:p.cap.faixaB??null,faixaC:p.cap.faixaC??null,faixaD:p.cap.faixaD??null,quizPct:p.cap.quizPct??null,
       waSpend:p.wa.spend,waClicks:p.wa.clicks,waLpv:p.wa.lpv,waCpc:p.wa.cpc,waCustoLpv:p.wa.custoLpv,
       totalSpend:p.total.spend};
   });
@@ -775,6 +945,7 @@ function renderPrincipal(){
     </div>
     <div class="filters">${toggleGroup("Temperatura",TEMP_OPTS,temp,"setPrincipalTemp")}</div>
     ${S.error?`<div class="err">⚠️ ${S.error}</div>`:""}
+    ${leadsNotice()}
 
     <div class="blk-title" style="margin-top:4px"><span class="dot" style="background:${CHART_INV}"></span>Visão geral</div>
     <div class="g4">
@@ -787,7 +958,7 @@ function renderPrincipal(){
     <div class="blk-title"><span class="dot" style="background:${CHART_LEAD}"></span>Captação de leads</div>
     <div class="g5">
       ${kpiCard("Investimento",fBRL(p.cap.spend),"campanhas de leads")}
-      ${kpiCard("Leads",S.has.leads?fInt(p.cap.leads):"—","gerenciador (pixel)",CHART_LEAD)}
+      ${kpiCard("Leads",temLeads()?fInt(p.cap.leads):"—",S.hasLeadsBase?`Base leads · gerenciador: ${fInt(p.cap.leadsGer)}${p.cap.semUtm?` · ${fInt(p.cap.semUtm)} sem UTM`:""}`:"gerenciador (pixel)",CHART_LEAD)}
       ${kpiMeta("Custo por lead",p.cap.cpl,fBRL,"cpl")}
       ${kpiMeta("Tx quente",p.cap.quentePct,fPct,"quente",`morno ${fPctOrDash(p.cap.mornoPct)}`)}
       ${kpiMeta("Tx frio",p.cap.frioPct,fPct,"frio")}
@@ -812,9 +983,26 @@ function renderPrincipal(){
     </div>
     <div class="cc" style="margin-top:12px;position:relative">
       <div class="ch"><span class="ct">Leads por dia</span>
-        <div class="lg"><span class="li"><span class="ld" style="background:${CHART_LEAD}"></span>Leads (gerenciador)</span></div></div>
+        <div class="lg"><span class="li"><span class="ld" style="background:${CHART_LEAD}"></span>Leads (${leadsFonte()})</span></div></div>
       <div style="position:relative"><canvas id="c-leads"></canvas><div class="tip" id="t-leads"></div></div>
     </div>
+
+    ${S.hasLeadsBase?`
+    <div class="blk-title"><span class="dot" style="background:${CHART_FAIXA.B}"></span>Qualificação (pesquisa)</div>
+    <div class="g6">
+      ${kpiMeta("Tx resp. pesquisa",p.cap.quizPct,fPct,"quiz",`${fInt(p.cap.nResp)} de ${fInt(p.cap.nComInfo)} leads`)}
+      ${kpiMeta("Faixa A",p.cap.faixaA,fPct,"faixaA")}
+      ${kpiMeta("Faixa B",p.cap.faixaB,fPct,"faixaB")}
+      ${kpiMeta("Faixa C",p.cap.faixaC,fPct,"faixaC")}
+      ${kpiMeta("Faixa D",p.cap.faixaD,fPct,"faixaD")}
+      ${kpiMeta("Tx clique no grupo",p.cap.grupoPct,fPct,"grupo")}
+    </div>
+    <div class="section-lbl" style="margin-top:8px">% de faixa = sobre quem tem faixa (${fInt(p.cap.nComFaixa)} leads). Tx resp. pesquisa e Tx clique no grupo usam só leads com essa informação — os cadastros antigos (07→11/10, sem pesquisa) ficam fora dessas taxas.</div>
+    <div class="cc" style="margin-top:6px;position:relative">
+      <div class="ch"><span class="ct">% Faixa por dia</span>
+        <div class="lg">${["A","B","C","D"].map(L=>`<span class="li"><span class="ll" style="background:${CHART_FAIXA[L]}"></span>Faixa ${L}</span>`).join("")}</div></div>
+      <div style="position:relative"><canvas id="c-faixa"></canvas><div class="tip" id="t-faixa"></div></div>
+    </div>`:""}
 
     ${waVis?`
     <div class="blk-title"><span class="dot" style="background:${CHART_WA}"></span>Tráfego WhatsApp</div>
@@ -846,6 +1034,12 @@ function renderPrincipal(){
     const b2=document.getElementById("c-leads")?.parentElement;
     if(b2)drawBarSingle("c-leads",daily,"leads",CHART_LEAD,b2.clientWidth,200);
     setupTip("c-leads","t-leads",daily,[{name:"Leads",color:CHART_LEAD,key:"leads",fmt:fInt},{name:"Custo/lead",color:CHART_CPL,key:"cpl"}],44,12,true);
+    const b4=document.getElementById("c-faixa")?.parentElement;
+    if(b4){
+      const dF=daily.filter(d=>d.faixaA!=null||d.faixaB!=null||d.faixaC!=null||d.faixaD!=null);
+      drawMultiLine("c-faixa",dF,["A","B","C","D"].map(L=>({key:"faixa"+L,color:CHART_FAIXA[L]})),b4.clientWidth,220);
+      setupTip("c-faixa","t-faixa",dF,["A","B","C","D"].map(L=>({name:"Faixa "+L,color:CHART_FAIXA[L],key:"faixa"+L,fmt:v=>fPct(v)})),40,12);
+    }
     const b3=document.getElementById("c-wa")?.parentElement;
     if(b3){
       const d3=daily.map(d=>({...d,spend:d.waSpend,waCpcK:d.waCpc}));
@@ -887,13 +1081,14 @@ function adResumoBlock(a){
   if(a.igUrl)L.push(a.igUrl);
   L.push(`Tipo:\t${a.tipos}`);
   L.push(`Investimento:\t${fBRL(a.spend)}`);
-  if(a.temCap){ L.push(`Leads:\t${S.has.leads?fInt(a.leads):"—"}`); L.push(`Custo/lead:\t${fBRLOrDash(a.cpl)}`); }
+  if(a.temCap){ L.push(`Leads:\t${temLeads()?fInt(a.leads):"—"}`); L.push(`Custo/lead:\t${fBRLOrDash(a.cpl)}`); }
   L.push(``);
   L.push(`CPC:\t${fBRLOrDash(a.cpc)}`);
   L.push(`CTR:\t${fPctOrDash(a.ctr)}`);
   L.push(`CPM:\t${fBRLOrDash(a.cpm)}`);
   L.push(`Connect Rate:\t${fPctOrDash(a.connectRate)}`);
   if(a.temCap)L.push(`Tx conv. página:\t${fPctOrDash(a.txConvPg)}`);
+  if(a.temCap&&S.hasLeadsBase){ L.push(``); ["A","B","C","D"].forEach(F=>L.push(`Faixa ${F}:\t${fPctOrDash(a["faixa"+F])}`)); L.push(`Tx resp. pesquisa:\t${fPctOrDash(a.quizPct)}`); }
   L.push(`__________________________`);
   return L.join("\n");
 }
@@ -910,28 +1105,46 @@ function renderAnuncios(){
   const escJs=s=>String(s).replace(/\\/g,"\\\\").replace(/'/g,"\\'").replace(/"/g,"&quot;");
   const base=filterRows({start:S.startDate,end:S.endDate,tipo:S.anunciosTipo});
 
-  const campsAll=groupBy(base,r=>r.campName,rs=>({campName:rs[0].campName,tipo:rs[0].tipo,temp:rs[0].temp}));
+  const per={start:S.startDate,end:S.endDate};
+  const leadsTipo=S.anunciosTipo==="whatsapp"?[]:filterLeads(per);
+  const campsAll=groupBy(base,r=>r.campName,rs=>({campName:rs[0].campName,tipo:rs[0].tipo,temp:rs[0].temp,
+    ...packOf(rs,leadsTipo.filter(l=>l.campName===rs[0].campName))}));
+  // Campanha que aparece na Base leads mas (ainda) não na Base meta: entra com
+  // investimento zero, pra nenhum lead sumir da tabela.
+  const nomesMeta=new Set(campsAll.map(c=>c.campName));
+  [...new Set(leadsTipo.filter(l=>l.hasUtm&&!nomesMeta.has(l.campName)).map(l=>l.campName))].forEach(n=>
+    campsAll.push({campName:n,tipo:campaignTipo(n),temp:campaignTemperature(n),...packOf([],leadsTipo.filter(l=>l.campName===n))}));
+  // Leads sem UTM (ex.: cadastros antigos) — linha própria, sem investimento.
+  const semUtmLeads=leadsTipo.filter(l=>!l.hasUtm);
+  if(S.hasLeadsBase&&semUtmLeads.length)campsAll.push({campName:SEM_UTM,tipo:"captacao",temp:"",semUtmRow:true,...packOf([],semUtmLeads),cpl:null,txConvPg:null});
   const cq=S.campSearch.trim().toLowerCase();
   const camps=sortBy(cq?campsAll.filter(c=>c.campName.toLowerCase().includes(cq)):campsAll,S.cSort);
   const campSel=S.selectedCamps.size>0;
-  const campTot=derive(sumRows(campSel?base.filter(r=>S.selectedCamps.has(r.campName)):base.filter(r=>camps.some(c=>c.campName===r.campName))));
+  const campNames=new Set(campSel?[...S.selectedCamps]:camps.map(c=>c.campName));
+  const campRowsSel=base.filter(r=>campNames.has(r.campName));
+  const campLeadsSel=leadsTipo.filter(l=>campNames.has(l.campName));
+  const campTot=packOf(campRowsSel,campLeadsSel);
+  const totCap=packOf(campRowsSel.filter(r=>r.tipo==="captacao"),campLeadsSel);
 
   const adBase=campSel?base.filter(r=>S.selectedCamps.has(r.campName)):base;
+  const adLeads=campSel?leadsTipo.filter(l=>S.selectedCamps.has(l.campName)):leadsTipo;
   const adsAll=groupBy(adBase,r=>r.adName,rs=>{
     const tipos=[...new Set(rs.map(r=>r.tipo))];
     const cap=rs.filter(r=>r.tipo==="captacao");
-    const capD=derive(sumRows(cap));
-    return{adName:rs[0].adName,igUrl:(rs.find(r=>r.igUrl)||{}).igUrl||"",nCamps:new Set(rs.map(r=>r.campName)).size,
+    const capD=packOf(cap,adLeads.filter(l=>l.adName===rs[0].adName));
+    return{...capD,...derive(sumRows(rs)),adName:rs[0].adName,igUrl:(rs.find(r=>r.igUrl)||{}).igUrl||"",nCamps:new Set(rs.map(r=>r.campName)).size,
       tipos:tipos.map(t=>TIPO_LABEL[t]).join(" + "),tipoList:tipos,temCap:cap.length>0,
-      // CPL e Tx conv. do anúncio olham só as linhas de captação
-      cpl:capD.cpl,txConvPg:capD.txConvPg,leads:capD.leads};
+      // Leads, CPL, faixas e Tx conv. do anúncio olham só as campanhas de captação
+      leads:capD.leads,cpl:capD.cpl,txConvPg:capD.txConvPg};
   });
   const aq=S.adSearch.trim().toLowerCase();
   const ads=sortBy(aq?adsAll.filter(a=>a.adName.toLowerCase().includes(aq)):adsAll,S.aSort);
   const adSel=S.selectedAds.size>0;
-  const adTotRows=adBase.filter(r=>adSel?S.selectedAds.has(r.adName):ads.some(a=>a.adName===r.adName));
-  const adTot=derive(sumRows(adTotRows));
-  const adTotCap=derive(sumRows(adTotRows.filter(r=>r.tipo==="captacao")));
+  const adNames=new Set(adSel?[...S.selectedAds]:ads.map(a=>a.adName));
+  const adTotRows=adBase.filter(r=>adNames.has(r.adName));
+  const adTotLeads=adLeads.filter(l=>adNames.has(l.adName));
+  const adTot=packOf(adTotRows,adTotLeads);
+  const adTotCap=packOf(adTotRows.filter(r=>r.tipo==="captacao"),adTotLeads);
 
   const selAds=ads.filter(a=>S.selectedAds.has(a.adName));
   el._adResumoText=selAds.map(adResumoBlock).join("\n");
@@ -943,11 +1156,12 @@ function renderAnuncios(){
   }
   const td=(v,color)=>`<td class="mono" style="text-align:right${color?";color:"+color:""}">${v}</td>`;
   const tdT=(v)=>`<td class="mono" style="text-align:right;font-weight:700;color:var(--text-strong)">${v}</td>`;
-  const metricCols=isCamp=>`${th("spend","Investimento",isCamp)}${th("leads","Leads",isCamp)}${th("cpl","Custo/lead",isCamp)}${th("clicks","Cliques",isCamp)}${th("cpc","CPC",isCamp)}${th("ctr","CTR",isCamp)}${th("cpm","CPM",isCamp)}${th("lpv","Visualiz. pg",isCamp)}${th("connectRate","Connect",isCamp)}${th("txConvPg","Tx conv. pg",isCamp)}`;
-  const metricTds=(x,isWa)=>`${td(fBRL(x.spend))}${td(isWa||!S.has.leads?"—":fInt(x.leads))}${td(isWa?"—":fBRLOrDash(x.cpl),isWa?"":metaColor("cpl",x.cpl))}${td(fInt(x.clicks))}${td(fBRLOrDash(x.cpc))}${td(fPctOrDash(x.ctr))}${td(fBRLOrDash(x.cpm))}${td(S.has.lpv?fInt(x.lpv):"—")}${td(fPctOrDash(x.connectRate))}${td(isWa?"—":fPctOrDash(x.txConvPg))}`;
+  const metricCols=isCamp=>`${th("spend","Investimento",isCamp)}${th("leads","Leads",isCamp)}${th("cpl","Custo/lead",isCamp)}${th("clicks","Cliques",isCamp)}${th("cpc","CPC",isCamp)}${th("ctr","CTR",isCamp)}${th("cpm","CPM",isCamp)}${th("lpv","Visualiz. pg",isCamp)}${th("connectRate","Connect",isCamp)}${th("txConvPg","Tx conv. pg",isCamp)}${S.hasLeadsBase?`${th("faixaA","Faixa A",isCamp)}${th("faixaB","Faixa B",isCamp)}${th("faixaC","Faixa C",isCamp)}${th("faixaD","Faixa D",isCamp)}${th("quizPct","% pesquisa",isCamp)}${th("grupoPct","% grupo",isCamp)}`:""}`;
+  const qualTds=(x,isWa,cell=td)=>S.hasLeadsBase?["faixaA","faixaB","faixaC","faixaD","quizPct","grupoPct"].map(k=>cell(isWa?"—":fPctOrDash(x[k]),isWa||cell!==td?"":metaColor(k==="quizPct"?"quiz":k==="grupoPct"?"grupo":k,x[k]))).join(""):"";
+  const metricTds=(x,isWa)=>`${td(fBRL(x.spend))}${td(isWa||!temLeads()?"—":fInt(x.leads))}${td(isWa?"—":fBRLOrDash(x.cpl),isWa?"":metaColor("cpl",x.cpl))}${td(fInt(x.clicks))}${td(fBRLOrDash(x.cpc))}${td(fPctOrDash(x.ctr))}${td(fBRLOrDash(x.cpm))}${td(S.has.lpv?fInt(x.lpv):"—")}${td(fPctOrDash(x.connectRate))}${td(isWa?"—":fPctOrDash(x.txConvPg))}${qualTds(x,isWa)}`;
   const searchBox=(id,fn,val,ph)=>`<div style="margin-bottom:10px"><input id="${id}" oninput="${fn}(this.value)" value="${esc(val)}" placeholder="${ph}" style="width:100%;padding:8px 12px;background:var(--card);border:1px solid var(--border);border-radius:9px;color:var(--text);font-size:12px;font-family:'DM Sans',sans-serif;outline:none"/></div>`;
   const btnClear=(fn,n)=>`<button onclick="${fn}()" style="font-size:10px;padding:3px 9px;border:1px solid rgba(239,68,68,.4);background:rgba(239,68,68,.08);color:#f87171;border-radius:5px;cursor:pointer;font-family:'DM Sans',sans-serif">✕ Limpar seleção (${n})</button>`;
-  const totalTipo=campTot; const totCap=derive(sumRows((campSel?base.filter(r=>S.selectedCamps.has(r.campName)):base).filter(r=>r.tipo==="captacao")));
+  const totalTipo=campTot;
 
   el.innerHTML=`
     <div class="hdr" style="margin-bottom:6px">
@@ -960,7 +1174,7 @@ function renderAnuncios(){
     ${S.error?`<div class="err">⚠️ ${S.error}</div>`:""}
     <div class="g5" style="margin-bottom:20px">
       ${kpiCard("Investimento",fBRL(totalTipo.spend),campSel?"campanhas selecionadas":"no período")}
-      ${kpiCard("Leads",S.has.leads?fInt(totCap.leads):"—","só campanhas de captação")}
+      ${kpiCard("Leads",temLeads()?fInt(totCap.leads):"—","só campanhas de captação")}
       ${kpiMeta("Custo/lead",totCap.cpl,fBRL,"cpl")}
       ${kpiMeta("CPC",totalTipo.cpc,fBRL,"cpc")}
       ${kpiMeta("CTR",totalTipo.ctr,fPct,"ctr")}
@@ -976,8 +1190,12 @@ function renderAnuncios(){
       <table>
         <thead><tr><th style="width:36px"></th><th onclick="sortCampanhas('campName')">Campanha</th><th>Tipo</th><th>Temp.</th>${metricCols(true)}</tr></thead>
         <tbody>
-          ${camps.length===0?`<tr><td colspan="14" style="text-align:center;color:var(--hint);padding:20px">Sem dados de campanhas no período</td></tr>`:
+          ${camps.length===0?`<tr><td colspan="20" style="text-align:center;color:var(--hint);padding:20px">Sem dados de campanhas no período</td></tr>`:
           camps.map(c=>{const sel=S.selectedCamps.has(c.campName);const isWa=c.tipo==="whatsapp";
+            if(c.semUtmRow)return `<tr style="background:rgba(148,163,184,.04)">
+              <td></td><td style="color:var(--muted)">${SEM_UTM} <span style="font-size:10px;color:var(--hint)">(leads sem campanha — ex.: cadastros de 07→11/10)</span></td>
+              <td><span class="tag tag-cap">Captação</span></td><td>${tempTag("")}</td>
+              ${td("—")}${td(fInt(c.leads))}${td("—")}${td("—")}${td("—")}${td("—")}${td("—")}${td("—")}${td("—")}${td("—")}${qualTds(c,false)}</tr>`;
             return `<tr onclick="toggleCamp('${escJs(c.campName)}')" style="cursor:pointer;background:${sel?"rgba(16,185,129,.1)":"transparent"}">
               <td>${chkBox(sel)}</td>
               <td style="color:${sel?"#10b981":"var(--text)"};font-weight:${sel?600:400}">${esc(c.campName)}</td>
@@ -986,7 +1204,7 @@ function renderAnuncios(){
         </tbody>
         ${camps.length?`<tfoot><tr style="background:rgba(148,163,184,.10);border-top:2px solid var(--border)">
           <td></td><td colspan="3" style="font-weight:700;color:var(--text-strong)">${campSel?"TOTAL da seleção":"TOTAL"}</td>
-          ${tdT(fBRL(campTot.spend))}${tdT(S.has.leads?fInt(totCap.leads):"—")}${tdT(fBRLOrDash(totCap.cpl))}${tdT(fInt(campTot.clicks))}${tdT(fBRLOrDash(campTot.cpc))}${tdT(fPctOrDash(campTot.ctr))}${tdT(fBRLOrDash(campTot.cpm))}${tdT(S.has.lpv?fInt(campTot.lpv):"—")}${tdT(fPctOrDash(campTot.connectRate))}${tdT(fPctOrDash(totCap.txConvPg))}
+          ${tdT(fBRL(campTot.spend))}${tdT(temLeads()?fInt(totCap.leads):"—")}${tdT(fBRLOrDash(totCap.cpl))}${tdT(fInt(campTot.clicks))}${tdT(fBRLOrDash(campTot.cpc))}${tdT(fPctOrDash(campTot.ctr))}${tdT(fBRLOrDash(campTot.cpm))}${tdT(S.has.lpv?fInt(campTot.lpv):"—")}${tdT(fPctOrDash(campTot.connectRate))}${tdT(fPctOrDash(totCap.txConvPg))}${qualTds(totCap,false,tdT)}
         </tr></tfoot>`:""}
       </table>
     </div></div>
@@ -1001,7 +1219,7 @@ function renderAnuncios(){
       <table>
         <thead><tr><th style="width:36px"></th><th onclick="sortAnuncios('adName')">Anúncio</th><th>Tipo</th>${metricCols(false)}<th></th></tr></thead>
         <tbody>
-          ${ads.length===0?`<tr><td colspan="15" style="text-align:center;color:var(--hint);padding:20px">Sem dados de anúncios no período</td></tr>`:
+          ${ads.length===0?`<tr><td colspan="21" style="text-align:center;color:var(--hint);padding:20px">Sem dados de anúncios no período</td></tr>`:
           ads.map(a=>{const sel=S.selectedAds.has(a.adName);const isWa=!a.temCap;
             return `<tr onclick="toggleAd('${escJs(a.adName)}')" style="cursor:pointer;background:${sel?"rgba(16,185,129,.1)":"transparent"}">
               <td>${chkBox(sel)}</td>
@@ -1013,11 +1231,11 @@ function renderAnuncios(){
         </tbody>
         ${ads.length?`<tfoot><tr style="background:rgba(148,163,184,.10);border-top:2px solid var(--border)">
           <td></td><td colspan="2" style="font-weight:700;color:var(--text-strong)">${adSel?"TOTAL da seleção":"TOTAL"}</td>
-          ${tdT(fBRL(adTot.spend))}${tdT(S.has.leads?fInt(adTotCap.leads):"—")}${tdT(fBRLOrDash(adTotCap.cpl))}${tdT(fInt(adTot.clicks))}${tdT(fBRLOrDash(adTot.cpc))}${tdT(fPctOrDash(adTot.ctr))}${tdT(fBRLOrDash(adTot.cpm))}${tdT(S.has.lpv?fInt(adTot.lpv):"—")}${tdT(fPctOrDash(adTot.connectRate))}${tdT(fPctOrDash(adTotCap.txConvPg))}<td></td>
+          ${tdT(fBRL(adTot.spend))}${tdT(temLeads()?fInt(adTotCap.leads):"—")}${tdT(fBRLOrDash(adTotCap.cpl))}${tdT(fInt(adTot.clicks))}${tdT(fBRLOrDash(adTot.cpc))}${tdT(fPctOrDash(adTot.ctr))}${tdT(fBRLOrDash(adTot.cpm))}${tdT(S.has.lpv?fInt(adTot.lpv):"—")}${tdT(fPctOrDash(adTot.connectRate))}${tdT(fPctOrDash(adTotCap.txConvPg))}${qualTds(adTotCap,false,tdT)}<td></td>
         </tr></tfoot>`:""}
       </table>
     </div></div>
-    <div style="font-size:10px;color:var(--hint);margin-top:8px">O mesmo criativo roda em mais de uma campanha — a linha do anúncio soma todas. Leads, Custo/lead e Tx conv. pg do anúncio contam só as campanhas de captação.</div>
+    <div style="font-size:10px;color:var(--hint);margin-top:8px">O mesmo criativo roda em mais de uma campanha — a linha do anúncio soma todas. Leads, Custo/lead, faixas e Tx conv. pg contam só as campanhas de captação. Leads ${S.hasLeadsBase?"da Base leads, atribuídos pelo nome da campanha/anúncio da UTM":"do gerenciador"}.</div>
 
     ${selAds.length?`
     <div style="margin-top:22px">
@@ -1092,6 +1310,107 @@ function renderMetricasTrafego(){
   });
 }
 
+// ── Render: Análise qualificação ──────────────────────────────────────────
+function setLeadsTemp(t){ S.leadsTemp=t; renderLeads(); }
+function setLeadsSearch(v){ S.leadsSearch=v; preservaFoco(()=>renderLeads()); }
+function sortLeadsTab(col){ if(S.leadsSort.col===col)S.leadsSort.dir=S.leadsSort.dir==="asc"?"desc":"asc";else{S.leadsSort.col=col;S.leadsSort.dir="desc";} renderLeads(); }
+function distBlock(title,ls,keyFn,colorFn,note){
+  const comVal=ls.map(keyFn).filter(v=>v!=null&&v!=="");
+  const cnt={}; comVal.forEach(v=>cnt[v]=(cnt[v]||0)+1);
+  const arr=Object.entries(cnt).sort((a,b)=>b[1]-a[1]);
+  return `<div class="cc">
+    <div class="ch"><span class="ct">${title}</span><span style="font-size:10px;color:var(--hint)">${fInt(comVal.length)} resposta(s)</span></div>
+    ${arr.length?arr.map(([k,n],i)=>barRow(k,n,comVal.length,colorFn?colorFn(k,i):"#60a5fa")).join(""):`<div style="font-size:11px;color:var(--hint)">Sem respostas no período.</div>`}
+    ${note?`<div style="font-size:10px;color:var(--hint);margin-top:6px">${note}</div>`:""}
+  </div>`;
+}
+// Tabela "faixa por X": leads, % pesquisa, % A/B/C/D, % grupo, pontos médios
+function faixaTable(title,ls,keyFn){
+  const g={}; ls.forEach(l=>{const k=keyFn(l)||"—";(g[k]=g[k]||[]).push(l);});
+  const rows=Object.entries(g).map(([k,arr])=>({k,...qualityOf(arr)})).sort((a,b)=>b.nLeads-a.nLeads);
+  const td=(v,c)=>`<td class="mono" style="text-align:right${c?";color:"+c:""}">${v}</td>`;
+  return `<div class="section-lbl">${title}</div>
+  <div class="cc" style="padding:0;overflow:hidden;margin-bottom:16px"><div style="overflow-x:auto"><table>
+    <thead><tr><th>${title.split(" por ")[1]||""}</th><th style="text-align:right">Leads</th><th style="text-align:right">% pesquisa</th><th style="text-align:right">Faixa A</th><th style="text-align:right">Faixa B</th><th style="text-align:right">Faixa C</th><th style="text-align:right">Faixa D</th><th style="text-align:right">Pontos médios</th><th style="text-align:right">% grupo</th></tr></thead>
+    <tbody>${rows.map(r=>`<tr><td>${esc(r.k)}</td>${td(fInt(r.nLeads))}${td(fPctOrDash(r.quizPct))}${["A","B","C","D"].map(F=>td(fPctOrDash(r["faixa"+F]),metaColor("faixa"+F,r["faixa"+F]))).join("")}${td(r.pontosMedio==null?"—":r.pontosMedio.toFixed(1).replace(".",","))}${td(fPctOrDash(r.grupoPct))}</tr>`).join("")}</tbody>
+  </table></div></div>`;
+}
+function renderLeads(){
+  const el=document.getElementById("page-leads");if(!el)return;
+  if(!S.hasLeadsBase){
+    el.innerHTML=`<div class="hdr"><div><div class="hdr-title">Análise qualificação</div></div></div>${leadsNotice()||`<div class="notice">A aba "${CONFIG.abaLeads}" ainda não foi carregada.</div>`}${foot("Análise qualificação")}`;
+    return;
+  }
+  const temp=S.leadsTemp;
+  const ls=filterLeads({start:S.startDate,end:S.endDate,temp});
+  const q=qualityOf(ls);
+  const comPesq=ls.filter(l=>l.quiz!==null);
+  const faixaColor=k=>CHART_FAIXA[k]||"#60a5fa";
+  const pal=["#60a5fa","#34d399","#fbbf24","#a78bfa","#f87171","#22d3ee","#f472b6"];
+  const palFn=(k,i)=>pal[i%pal.length];
+  // tabela de leads
+  const sq=S.leadsSearch.trim().toLowerCase();
+  let list=sq?ls.filter(l=>[l.nome,l.campName,l.adName,l.placement,l.faixa,l.phone].join(" ").toLowerCase().includes(sq)):ls;
+  const {col,dir}=S.leadsSort;
+  list=[...list].sort((a,b)=>{const av=a[col],bv=b[col];if(av==null&&bv==null)return 0;if(av==null||av==="")return 1;if(bv==null||bv==="")return -1;
+    if(typeof av==="string")return dir==="asc"?av.localeCompare(bv):bv.localeCompare(av);return dir==="asc"?av-bv:bv-av;});
+  const shown=list.slice(0,300);
+  const th=(k,l,right)=>{const a=S.leadsSort.col===k;return `<th onclick="sortLeadsTab('${k}')"${right?' style="text-align:right"':""}>${l}<span style="color:${a?"#60a5fa":"var(--hint)"};margin-left:3px">${a?(S.leadsSort.dir==="asc"?"↑":"↓"):"↕"}</span></th>`;};
+  const fmtMs=ms=>{const d=new Date(ms);return `${String(d.getUTCDate()).padStart(2,"0")}/${String(d.getUTCMonth()+1).padStart(2,"0")} ${String(d.getUTCHours()).padStart(2,"0")}:${String(d.getUTCMinutes()).padStart(2,"0")}`;};
+  const sn=v=>v===true?"sim":v===false?`<span style="color:var(--hint)">não</span>`:`<span style="color:var(--hint)">—</span>`;
+
+  el.innerHTML=`
+    <div class="hdr" style="margin-bottom:6px">
+      <div>
+        <div class="hdr-title">Análise qualificação</div>
+        <div class="hdr-sub">${periodSub()} · Base leads · ${fInt(S.leadsInfo.linhas)} linhas lidas${S.leadsInfo.duplicadas?` · ${fInt(S.leadsInfo.duplicadas)} duplicadas removidas`:""}</div>
+      </div>
+    </div>
+    <div class="filters">${toggleGroup("Temperatura",TEMP_OPTS,temp,"setLeadsTemp")}</div>
+    ${S.error?`<div class="err">⚠️ ${S.error}</div>`:""}
+    <div class="g6" style="margin-bottom:8px">
+      ${kpiCard("Leads",fInt(q.nLeads),`${fInt(q.semUtm)} sem UTM`,CHART_LEAD)}
+      ${kpiMeta("Tx resp. pesquisa",q.quizPct,fPct,"quiz",`${fInt(q.nResp)} de ${fInt(q.nComInfo)}`)}
+      ${kpiCard("Com faixa",fInt(q.nComFaixa),"base das % de faixa")}
+      ${kpiCard("Pontos médios",q.pontosMedio==null?"—":q.pontosMedio.toFixed(1).replace(".",","),"de quem tem pontuação")}
+      ${kpiMeta("Tx clique no grupo",q.grupoPct,fPct,"grupo")}
+      ${kpiMeta("Tx quente",q.quentePct,fPct,"quente",`frio ${fPctOrDash(q.frioPct)}`)}
+    </div>
+    <div class="g4" style="margin-bottom:16px">
+      ${["A","B","C","D"].map(F=>kpiMeta("Faixa "+F,q["faixa"+F],fPct,"faixa"+F,`${fInt(ls.filter(l=>l.faixa===F).length)} leads`)).join("")}
+    </div>
+
+    <div class="section-lbl">Respostas da pesquisa — % sobre quem respondeu cada pergunta</div>
+    <div class="g3" style="margin-bottom:16px">
+      ${distBlock("Faixa",ls,l=>l.faixa,faixaColor)}
+      ${PERGUNTAS.map(([k,t])=>distBlock(t,comPesq,l=>l.resp[k],palFn)).join("")}
+      ${distBlock("Clicou no grupo",ls,l=>l.grupo===true?"sim":l.grupo===false?"não":"",(k)=>k==="sim"?"#34d399":"#f87171")}
+      ${distBlock("Posicionamento",ls.filter(l=>l.hasUtm),l=>l.placement,palFn)}
+    </div>
+
+    ${faixaTable("Qualidade por campanha",ls,l=>l.campName)}
+    ${faixaTable("Qualidade por anúncio",ls,l=>l.adName)}
+    ${faixaTable("Qualidade por posicionamento",ls.filter(l=>l.hasUtm),l=>l.placement)}
+    ${faixaTable("Qualidade por resposta de O que faz",comPesq,l=>l.resp.faz)}
+
+    <div class="section-lbl">Leads (${fInt(list.length)}${list.length>shown.length?` · mostrando ${shown.length}`:""})</div>
+    <div style="margin-bottom:10px"><input id="busca-lead" oninput="setLeadsSearch(this.value)" value="${esc(S.leadsSearch)}" placeholder="Buscar por nome, campanha, anúncio, faixa…" style="width:100%;padding:8px 12px;background:var(--card);border:1px solid var(--border);border-radius:9px;color:var(--text);font-size:12px;font-family:'DM Sans',sans-serif;outline:none"/></div>
+    <div class="cc" style="padding:0;overflow:hidden"><div style="overflow-x:auto"><table>
+      <thead><tr>${th("ms","Cadastro")}${th("nome","Nome")}${th("faixa","Faixa")}${th("pontos","Pontos",true)}<th>Pesquisa</th><th>Grupo</th>${th("temp","Público")}${th("campName","Campanha")}${th("adName","Anúncio")}${th("placement","Posicionamento")}</tr></thead>
+      <tbody>${shown.map(l=>`<tr>
+        <td class="mono">${fmtMs(l.ms)}</td>
+        <td>${esc(l.nome)}</td>
+        <td>${l.faixa?`<span class="tag" style="background:${CHART_FAIXA[l.faixa]}22;color:${CHART_FAIXA[l.faixa]}">${l.faixa}</span>`:`<span style="color:var(--hint)">—</span>`}</td>
+        <td class="mono" style="text-align:right">${l.pontos==null?"—":fInt(l.pontos)}</td>
+        <td>${sn(l.quiz)}</td><td>${sn(l.grupo)}</td>
+        <td>${tempTag(l.temp)}</td>
+        <td style="color:${l.hasUtm?"var(--text)":"var(--hint)"}">${esc(l.campName)}</td>
+        <td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(l.adName)}">${esc(l.adName)}</td>
+        <td>${esc(l.placement||"—")}</td></tr>`).join("")}</tbody>
+    </table></div></div>
+    ${foot("Análise qualificação")}`;
+}
+
 // ── Render: Planejado × Realizado ─────────────────────────────────────────
 function renderPlanoReal(){
   const el=document.getElementById("page-planoreal");if(!el)return;
@@ -1127,7 +1446,7 @@ function renderPlanoReal(){
       ${kpiCard("Realizado até hoje",fBRL(totReal),`captação ${fBRL(totCap)} · WhatsApp ${fBRL(totWa)}`,pct!=null?statusColor(totReal,totPlan,true):"var(--text-strong)",false,totReal,totPlan||null,true)}
       ${kpiCard("% do planejado",fPctOrDash(pct),`diferença ${fBRL(totReal-totPlan)}`,pct!=null?statusColor(totReal,totPlan,true):"var(--text-strong)")}
       ${kpiCard("Média por dia",fBRL(mediaDia),`plano R$ ${CONFIG.planoDiario}/dia`)}
-      ${kpiCard("Leads (captação)",S.has.leads?fInt(totLeads):"—",`CPL ${fBRLOrDash(S.has.leads&&totLeads?totCap/totLeads:null)}`,CHART_LEAD)}
+      ${kpiCard("Leads (captação)",temLeads()?fInt(totLeads):"—",`CPL ${fBRLOrDash(temLeads()&&totLeads?totCap/totLeads:null)}`,CHART_LEAD)}
     </div>
     <div class="cc" style="position:relative;margin-bottom:16px">
       <div class="ch"><span class="ct">Investimento por dia — planejado × realizado</span>
@@ -1149,7 +1468,7 @@ function renderPlanoReal(){
             <td class="mono" style="text-align:right">${fPctOrDash(r.pct)}</td>
             <td class="mono" style="text-align:right">${r.isFuture?"—":fBRL(r.cap)}</td>
             <td class="mono" style="text-align:right">${r.isFuture?"—":fBRL(r.wa)}</td>
-            <td class="mono" style="text-align:right">${r.isFuture||!S.has.leads?"—":fInt(r.leads)}</td>
+            <td class="mono" style="text-align:right">${r.isFuture||!temLeads()?"—":fInt(r.leads)}</td>
             <td class="mono" style="text-align:right">${r.isFuture?"—":fBRLOrDash(r.cpl)}</td>
             <td class="mono" style="text-align:right;color:var(--muted)">${r.isFuture?"—":fBRL(r.acPlan)}</td>
             <td class="mono" style="text-align:right;color:var(--muted)">${r.isFuture?"—":fBRL(r.acReal)}</td>
@@ -1163,8 +1482,8 @@ function renderPlanoReal(){
           <td class="mono" style="text-align:right;font-weight:700">${fPctOrDash(pct)}</td>
           <td class="mono" style="text-align:right;font-weight:700">${fBRL(totCap)}</td>
           <td class="mono" style="text-align:right;font-weight:700">${fBRL(totWa)}</td>
-          <td class="mono" style="text-align:right;font-weight:700">${S.has.leads?fInt(totLeads):"—"}</td>
-          <td class="mono" style="text-align:right;font-weight:700">${fBRLOrDash(S.has.leads&&totLeads?totCap/totLeads:null)}</td>
+          <td class="mono" style="text-align:right;font-weight:700">${temLeads()?fInt(totLeads):"—"}</td>
+          <td class="mono" style="text-align:right;font-weight:700">${fBRLOrDash(temLeads()&&totLeads?totCap/totLeads:null)}</td>
           <td></td><td></td>
         </tr></tfoot>
       </table>
@@ -1181,13 +1500,16 @@ function renderPlanoReal(){
 // ── Render: Resumo diário ─────────────────────────────────────────────────
 function renderResumo(){
   const el=document.getElementById("page-resumo");if(!el)return;
-  const today=todayISO(), yest=yesterdayISO();
+  // O resumo inteiro segue o filtro de datas: "Hoje" = último dia do filtro
+  // (limitado a hoje de verdade) e "Ontem" = o dia anterior a ele.
+  const realToday=todayISO();
+  const today=S.endDate&&S.endDate<realToday?S.endDate:realToday, yest=addDaysISO(today,-1);
   const first=S.dates[0]||CONFIG.planoInicio;
   const blocks=[
     // Total segue o filtro de datas do cabeçalho. O planejado conta só os dias
     // do filtro que já passaram (até hoje) e que estão dentro do plano.
     {key:"tot",title:"📶 Total - Período filtrado",txt:"*-> 📶Total*",dateLbl:`${fDateBR(S.startDate)} a ${fDateBR(S.endDate)}`,p:periodPack(S.startDate,S.endDate),
-      plan:planRange(S.startDate>CONFIG.planoInicio?S.startDate:CONFIG.planoInicio,S.endDate<today?S.endDate:today)},
+      plan:planRange(S.startDate>CONFIG.planoInicio?S.startDate:CONFIG.planoInicio,S.endDate<realToday?S.endDate:realToday)},
     {key:"ontem",title:"⬅️ Ontem",txt:"*⬅️ Ontem*",dateLbl:fDateBR(yest),p:periodPack(yest,yest),plan:planForDate(yest)},
     {key:"hoje",title:"⬇️ Hoje",txt:"*⬇️ Hoje*",dateLbl:fDateBR(today),p:periodPack(today,today),plan:planForDate(today)},
   ];
@@ -1200,12 +1522,19 @@ Investimento total:\t${fBRL(p.total.spend)}\t(plan.: ${fBRL(plan)})
 
 📥 Página de captura
 Investimento:\t${fBRL(p.cap.spend)}
-Leads:\t${S.has.leads?fInt(p.cap.leads):"—"}
+Leads:\t${temLeads()?fInt(p.cap.leads):"—"}
 Custo por lead:\t${fmtRow(p.cap.cpl,"cpl",fBRL)}
 
 Tx quente:\t${fmtRow(p.cap.quentePct,"quente",fPct)}
 Tx frio:\t${fmtRow(p.cap.frioPct,"frio",fPct)}
-
+${S.hasLeadsBase?`
+Faixa A:\t${fmtRow(p.cap.faixaA,"faixaA",fPct)}
+Faixa B:\t${fmtRow(p.cap.faixaB,"faixaB",fPct)}
+Faixa C:\t${fmtRow(p.cap.faixaC,"faixaC",fPct)}
+Faixa D:\t${fmtRow(p.cap.faixaD,"faixaD",fPct)}
+Tx resp. pesquisa:\t${fmtRow(p.cap.quizPct,"quiz",fPct)}
+Tx clique no grupo:\t${fmtRow(p.cap.grupoPct,"grupo",fPct)}
+`:""}
 CPC:\t${fmtRow(p.cap.cpc,"cpc",fBRL)}
 CTR:\t${fmtRow(p.cap.ctr,"ctr",fPct)}
 CPM:\t${fmtRow(p.cap.cpm,"cpm",fBRL)}
@@ -1227,7 +1556,7 @@ CPC:\t${fmtRow(p.wa.cpc,"cpcWhats",fBRL)}`;
     return `<div style="display:grid;grid-template-columns:200px 1fr auto;gap:8px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.04);align-items:center">
       <span style="color:var(--muted);font-size:12px">${lbl}</span>
       <span style="font-family:'JetBrains Mono',monospace;font-size:13px;color:${meta!=null&&raw!=null?metaColor(k,raw):"var(--text-strong)"}">${val}</span>
-      <span style="font-size:10px;color:var(--hint)">${meta!=null?`${metaEmoji(k,raw)} 🎯 ${k==="ctr"||k==="connectRate"||k==="txConvPg"||k==="quente"||k==="frio"?fPct(meta):fBRL(meta)}`:""}</span>
+      <span style="font-size:10px;color:var(--hint)">${meta!=null?`${metaEmoji(k,raw)} 🎯 ${/^(ctr|connectRate|txConvPg|quente|frio|faixa[A-D]|quiz|grupo)$/.test(k)?fPct(meta):fBRL(meta)}`:""}</span>
     </div>`;
   }
   const sub=t=>`<div style="font-size:10px;font-weight:700;color:var(--hint);text-transform:uppercase;letter-spacing:.08em;margin:14px 0 4px">${t}</div>`;
@@ -1245,11 +1574,15 @@ CPC:\t${fmtRow(p.wa.cpc,"cpcWhats",fBRL)}`;
       </div>
       ${sub("📥 Página de captura")}
       ${row("Investimento",fBRL(p.cap.spend))}
-      ${row("Leads",S.has.leads?fInt(p.cap.leads):"—")}
+      ${row("Leads",temLeads()?fInt(p.cap.leads):"—")}
       ${row("Custo por lead",fBRLOrDash(p.cap.cpl),"cpl",p.cap.cpl)}
       <div style="height:8px"></div>
       ${row("Tx quente",fPctOrDash(p.cap.quentePct),"quente",p.cap.quentePct)}
       ${row("Tx frio",fPctOrDash(p.cap.frioPct),"frio",p.cap.frioPct)}
+      ${S.hasLeadsBase?`<div style="height:8px"></div>
+      ${["A","B","C","D"].map(F=>row("Faixa "+F,fPctOrDash(p.cap["faixa"+F]),"faixa"+F,p.cap["faixa"+F])).join("")}
+      ${row("Tx resp. pesquisa",fPctOrDash(p.cap.quizPct),"quiz",p.cap.quizPct)}
+      ${row("Tx clique no grupo",fPctOrDash(p.cap.grupoPct),"grupo",p.cap.grupoPct)}`:""}
       <div style="height:8px"></div>
       ${row("CPC",fBRLOrDash(p.cap.cpc),"cpc",p.cap.cpc)}
       ${row("CTR",fPctOrDash(p.cap.ctr),"ctr",p.cap.ctr)}
@@ -1267,7 +1600,7 @@ CPC:\t${fmtRow(p.wa.cpc,"cpcWhats",fBRL)}`;
     <div class="hdr" style="margin-bottom:16px">
       <div>
         <div class="hdr-title">Resumo diário</div>
-        <div class="hdr-sub">${CONFIG.nome} · ontem: ${fDateBR(yest)} · hoje: ${fDateBR(today)} · Total segue o filtro de datas</div>
+        <div class="hdr-sub">${CONFIG.nome} · Total: ${fDateBR(S.startDate)} a ${fDateBR(S.endDate)} · Ontem: ${fDateBR(yest)} · Hoje: ${fDateBR(today)} · tudo segue o filtro de datas</div>
       </div>
       <button onclick="copyText(document.getElementById('page-resumo')._resumoText,'.btn-copy-resumo')" class="btn-copy-resumo" style="display:inline-flex;align-items:center;gap:6px;padding:8px 18px;background:rgba(59,130,246,.18);border:1px solid rgba(96,165,250,.35);color:#93c5fd;border-radius:9px;cursor:pointer;font-size:12px;font-weight:600;font-family:'DM Sans',sans-serif">📋 Copiar resumo</button>
     </div>
@@ -1293,6 +1626,7 @@ function render(){
     if(S.currentSubPage==="principal")renderPrincipal();
     else if(S.currentSubPage==="anuncios")renderAnuncios();
     else if(S.currentSubPage==="metricas")renderMetricasTrafego();
+    else if(S.currentSubPage==="leads")renderLeads();
   }
   else if(S.currentPage==="planoreal")renderPlanoReal();
   else if(S.currentPage==="resumo")renderResumo();
