@@ -1510,23 +1510,25 @@ function renderPlanoReal(){
 // ── Render: Resumo diário ─────────────────────────────────────────────────
 function renderResumo(){
   const el=document.getElementById("page-resumo");if(!el)return;
-  // O resumo inteiro segue o filtro de datas: "Hoje" = último dia do filtro
-  // (limitado a hoje de verdade) e "Ontem" = o dia anterior a ele.
-  const realToday=todayISO();
-  const today=S.endDate&&S.endDate<realToday?S.endDate:realToday, yest=addDaysISO(today,-1);
+  // Total = filtro de datas do cabeçalho. "Essa edição" = da última sexta-feira
+  // (ou hoje, se hoje for sexta) até hoje. "Hoje" = o dia de hoje de verdade.
+  const realToday=todayISO(), today=realToday;
+  const dow=new Date(today+"T12:00:00Z").getUTCDay(); // 0=dom … 5=sex
+  const edIni=addDaysISO(today,-((dow-5+7)%7));
   const first=S.dates[0]||CONFIG.planoInicio;
   const blocks=[
     // Total segue o filtro de datas do cabeçalho. O planejado conta só os dias
     // do filtro que já passaram (até hoje) e que estão dentro do plano.
     {key:"tot",title:"📶 Total - Período filtrado",txt:"*-> 📶Total*",dateLbl:`${fDateBR(S.startDate)} a ${fDateBR(S.endDate)}`,p:periodPack(S.startDate,S.endDate),
       plan:planRange(S.startDate>CONFIG.planoInicio?S.startDate:CONFIG.planoInicio,S.endDate<realToday?S.endDate:realToday)},
-    {key:"ontem",title:"⬅️ Ontem",txt:"*⬅️ Ontem*",dateLbl:fDateBR(yest),p:periodPack(yest,yest),plan:planForDate(yest)},
+    {key:"edicao",title:"🔁 Essa edição",txt:"*🔁 Essa edição*",dateLbl:`${fDateBR(edIni)} a ${fDateBR(today)}`,p:periodPack(edIni,today),
+      plan:planRange(edIni>CONFIG.planoInicio?edIni:CONFIG.planoInicio,today)},
     {key:"hoje",title:"⬇️ Hoje",txt:"*⬇️ Hoje*",dateLbl:fDateBR(today),p:periodPack(today,today),plan:planForDate(today)},
   ];
   const fmtRow=(v,k,fmt)=>`${v==null?"—":fmt(v)}${M(k)!=null?`\t${metaEmoji(k,v)} (🎯 ${fmt(M(k))})`:""}`;
   function textBlock(b){
     const {p,plan}=b;
-    return `${b.txt}${b.key==="tot"?"\t":""}
+    return `${b.txt}${b.key==="tot"?"\t":b.key==="edicao"?`\t${fDate(edIni)} a ${fDate(today)}`:""}
 
 Investimento total:\t${fBRL(p.total.spend)}\t(plan.: ${fBRL(plan)})
 
@@ -1610,7 +1612,7 @@ CPC:\t${fmtRow(p.wa.cpc,"cpcWhats",fBRL)}`;
     <div class="hdr" style="margin-bottom:16px">
       <div>
         <div class="hdr-title">Resumo diário</div>
-        <div class="hdr-sub">${CONFIG.nome} · Total: ${fDateBR(S.startDate)} a ${fDateBR(S.endDate)} · Ontem: ${fDateBR(yest)} · Hoje: ${fDateBR(today)} · tudo segue o filtro de datas</div>
+        <div class="hdr-sub">${CONFIG.nome} · Total (filtro): ${fDateBR(S.startDate)} a ${fDateBR(S.endDate)} · Essa edição: ${fDateBR(edIni)} a ${fDateBR(today)} · Hoje: ${fDateBR(today)}</div>
       </div>
       <button onclick="copyText(document.getElementById('page-resumo')._resumoText,'.btn-copy-resumo')" class="btn-copy-resumo" style="display:inline-flex;align-items:center;gap:6px;padding:8px 18px;background:rgba(59,130,246,.18);border:1px solid rgba(96,165,250,.35);color:#93c5fd;border-radius:9px;cursor:pointer;font-size:12px;font-weight:600;font-family:'DM Sans',sans-serif">📋 Copiar resumo</button>
     </div>
