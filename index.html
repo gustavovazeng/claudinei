@@ -445,6 +445,25 @@ function parseCadastro(s){
 }
 function simNao(v){ v=String(v||"").trim().toLowerCase(); return v==="sim"?true:(v==="não"||v==="nao")?false:null; }
 function utmParam(url,key){ const m=String(url||"").match(new RegExp("(?:^|[?&])"+key+"=([^&]*)")); return m?decodeURIComponent(m[1].replace(/\+/g," ")):""; }
+function utmId(v){ const m=String(v||"").match(/_id_(\d+)\s*$/); return m?m[1]:""; }
+// Chave de ligação lead ↔ mídia: SEMPRE o ID (campanha/anúncio). Sem ID na UTM,
+// cai pro nome; sem UTM nenhuma, vira "Sem UTM".
+function campKeyOf(id,name){ return id?id:(name&&name!==SEM_UTM?"nome:"+name:SEM_UTM); }
+// Depois de ler a Base meta: liga cada lead à campanha/anúncio pelo ID e usa o
+// NOME que está no gerenciador (o nome da UTM pode estar desatualizado).
+function ligaLeadsMidia(){
+  const campNome={}, adNome={};
+  for(const r of S.rows){ if(!campNome[r.campKey])campNome[r.campKey]=r.campName; if(!adNome[r.adKey])adNome[r.adKey]=r.adName; }
+  let semMatchCamp=0, semMatchAd=0;
+  for(const l of S.leads){
+    l.campKey=l.hasUtm?campKeyOf(l.campId,l.campName):SEM_UTM;
+    l.adKey=l.hasUtm?campKeyOf(l.adId,l.adName):SEM_UTM;
+    if(!l.hasUtm)continue;
+    if(campNome[l.campKey])l.campName=campNome[l.campKey]; else semMatchCamp++;
+    if(adNome[l.adKey])l.adName=adNome[l.adKey]; else semMatchAd++;
+  }
+  S.leadsInfo.semMatchCamp=semMatchCamp; S.leadsInfo.semMatchAd=semMatchAd;
+}
 function parseLeads(table){
   const info={linhas:0,duplicadas:0,semData:0,antigas:0};
   if(table.length<2)return{leads:[],info};
@@ -460,7 +479,7 @@ function parseLeads(table){
       const d=parseCadastro(faixaRaw); if(!d){info.semData++;continue;}
       info.antigas++;
       all.push({...d,nome:g("nome"),phone:(g("pesquisa")||g("whats")).replace(/\D/g,""),quiz:null,faixa:"",pontos:null,grupo:null,
-        temp:"",campName:SEM_UTM,adsetName:"",adName:SEM_UTM,placement:"",utmSource:"",hasUtm:false,resp:{},formatoAntigo:true});
+        temp:"",campName:SEM_UTM,adsetName:"",adName:SEM_UTM,campId:"",adsetId:"",adId:"",placement:"",utmSource:"",hasUtm:false,resp:{},formatoAntigo:true});
       continue;
     }
     const d=parseCadastro(g("cadastro")); if(!d){info.semData++;continue;}
@@ -473,6 +492,8 @@ function parseLeads(table){
       grupo:simNao(g("grupo")),
       temp:pub==="quente"?"Quente":pub==="morno"?"Morno":pub==="frio"?"Frio":campaignTemperature(campName),
       campName:campName||SEM_UTM,adsetName:g("conjunto"),adName:g("anuncio")||SEM_UTM,placement:g("posic"),
+      // IDs vêm do sufixo "_id_<número>" da UTM: utm_medium = campanha, utm_term = conjunto, utm_content = anúncio
+      campId:utmId(utmParam(origem,"utm_medium")),adsetId:utmId(utmParam(origem,"utm_term")),adId:utmId(utmParam(origem,"utm_content")),
       utmSource:utmParam(origem,"utm_source"),hasUtm:!!campName,resp,formatoAntigo:false});
   }
   // Dedup por telefone (últimos 11 dígitos): vale o 1º cadastro da pessoa.
@@ -523,8 +544,11 @@ async function loadData(){
         tipo:campaignTipo(campName),
         temp:campaignTemperature(campName),
       });
+      const _r=rows[rows.length-1];
+      _r.campKey=campKeyOf(_r.campId,_r.campName); _r.adKey=campKeyOf(_r.adId,_r.adName);
     }
     S.rows=rows;
+    ligaLeadsMidia();
     S.dates=[...new Set([...rows.map(r=>r.date),...S.leads.map(l=>l.date)])].sort();
     S.updated=S.dates.length?fDateBR(S.dates[S.dates.length-1]):"—";
     if(!S.startDate){
@@ -551,7 +575,7 @@ function filterRows(f={}){
     (f.start==null||r.date>=f.start)&&(f.end==null||r.date<=f.end)&&
     (!f.tipo||f.tipo==="todos"||r.tipo===f.tipo)&&
     (!f.temp||f.temp==="todos"||r.temp===tmap[f.temp])&&
-    (!f.camps||f.camps.size===0||f.camps.has(r.campName)));
+    (!f.camps||f.camps.size===0||f.camps.has(r.campKey)));
 }
 function sumRows(rows){
   const t={spend:0,clicks:0,impressions:0,reach:0,leads:0,leadsGer:0,lpv:0};
@@ -566,8 +590,8 @@ function filterLeads(f={}){
   return S.leads.filter(l=>
     (f.start==null||l.date>=f.start)&&(f.end==null||l.date<=f.end)&&
     (!f.temp||f.temp==="todos"||l.temp===tmap[f.temp])&&
-    (!f.camps||f.camps.size===0||f.camps.has(l.campName))&&
-    (!f.ads||f.ads.size===0||f.ads.has(l.adName)));
+    (!f.camps||f.camps.size===0||f.camps.has(l.campKey))&&
+    (!f.ads||f.ads.size===0||f.ads.has(l.adKey)));
 }
 // Qualidade de um conjunto de leads. Cada taxa usa como denominador só quem
 // TEM aquela informação (leads do formato antigo ficam fora).
@@ -1163,42 +1187,56 @@ function renderAnuncios(){
 
   const per={start:S.startDate,end:S.endDate};
   const leadsTipo=filterLeads(per);
-  const campsAll=groupBy(base,r=>r.campName,rs=>({campName:rs[0].campName,tipo:rs[0].tipo,temp:rs[0].temp,
-    ...packOf(rs,leadsTipo.filter(l=>l.campName===rs[0].campName))}));
-  // Campanha que aparece na Base leads mas (ainda) não na Base meta: entra com
+  // Campanhas: agrupadas pelo ID da campanha; leads ligados pelo mesmo ID.
+  const campsAll=groupBy(base,r=>r.campKey,rs=>({campKey:rs[0].campKey,campName:rs[0].campName,tipo:rs[0].tipo,temp:rs[0].temp,
+    ...packOf(rs,leadsTipo.filter(l=>l.campKey===rs[0].campKey))}));
+  // ID de campanha que aparece na Base leads mas não na Base meta: entra com
   // investimento zero, pra nenhum lead sumir da tabela.
-  const nomesMeta=new Set(campsAll.map(c=>c.campName));
-  [...new Set(leadsTipo.filter(l=>l.hasUtm&&!nomesMeta.has(l.campName)).map(l=>l.campName))].forEach(n=>
-    campsAll.push({campName:n,tipo:campaignTipo(n),temp:campaignTemperature(n),...packOf([],leadsTipo.filter(l=>l.campName===n))}));
+  const chavesMeta=new Set(campsAll.map(c=>c.campKey));
+  [...new Set(leadsTipo.filter(l=>l.hasUtm&&!chavesMeta.has(l.campKey)).map(l=>l.campKey))].forEach(k=>{
+    const ls=leadsTipo.filter(l=>l.campKey===k), n=ls[0].campName;
+    campsAll.push({campKey:k,campName:n,tipo:campaignTipo(n),temp:campaignTemperature(n),semMeta:true,...packOf([],ls)});
+  });
   // Leads sem UTM (ex.: cadastros antigos) — linha própria, sem investimento.
   const semUtmLeads=leadsTipo.filter(l=>!l.hasUtm);
-  if(S.hasLeadsBase&&semUtmLeads.length)campsAll.push({campName:SEM_UTM,tipo:"captacao",temp:"",semUtmRow:true,...packOf([],semUtmLeads),cpl:null,txConvPg:null});
+  if(S.hasLeadsBase&&semUtmLeads.length)campsAll.push({campKey:SEM_UTM,campName:SEM_UTM,tipo:"captacao",temp:"",semUtmRow:true,...packOf([],semUtmLeads),cpl:null,txConvPg:null});
   const cq=S.campSearch.trim().toLowerCase();
   const camps=sortBy(cq?campsAll.filter(c=>c.campName.toLowerCase().includes(cq)):campsAll,S.cSort);
   const campSel=S.selectedCamps.size>0;
-  const campNames=new Set(campSel?[...S.selectedCamps]:camps.map(c=>c.campName));
-  const campRowsSel=base.filter(r=>campNames.has(r.campName));
-  const campLeadsSel=leadsTipo.filter(l=>campNames.has(l.campName));
+  const campKeys=new Set(campSel?[...S.selectedCamps]:camps.map(c=>c.campKey));
+  const campRowsSel=base.filter(r=>campKeys.has(r.campKey));
+  const campLeadsSel=leadsTipo.filter(l=>campKeys.has(l.campKey));
   const campTot=packOf(campRowsSel,campLeadsSel);
   const totCap=packOf(campRowsSel.filter(r=>r.tipo==="captacao"),campLeadsSel);
 
-  const adBase=campSel?base.filter(r=>S.selectedCamps.has(r.campName)):base;
-  const adLeads=campSel?leadsTipo.filter(l=>S.selectedCamps.has(l.campName)):leadsTipo;
+  // Anúncios: a linha junta o mesmo criativo (mesmo nome) em todas as campanhas,
+  // mas cada lead é ligado pelo ID do anúncio — a linha soma os leads de todos
+  // os IDs de anúncio que ela agrupa.
+  const adBase=campSel?base.filter(r=>S.selectedCamps.has(r.campKey)):base;
+  const adLeads=campSel?leadsTipo.filter(l=>S.selectedCamps.has(l.campKey)):leadsTipo;
   const adsAll=groupBy(adBase,r=>r.adName,rs=>{
     const tipos=[...new Set(rs.map(r=>r.tipo))];
     const cap=rs.filter(r=>r.tipo==="captacao");
-    const capD=packOf(cap,adLeads.filter(l=>l.adName===rs[0].adName));
-    return{...capD,...derive(sumRows(rs)),adName:rs[0].adName,igUrl:(rs.find(r=>r.igUrl)||{}).igUrl||"",nCamps:new Set(rs.map(r=>r.campName)).size,
+    const keys=new Set(rs.map(r=>r.adKey));
+    const capD=packOf(cap,adLeads.filter(l=>keys.has(l.adKey)));
+    return{...capD,...derive(sumRows(rs)),adName:rs[0].adName,adKeys:keys,igUrl:(rs.find(r=>r.igUrl)||{}).igUrl||"",nCamps:new Set(rs.map(r=>r.campKey)).size,
       tipos:tipos.map(t=>TIPO_LABEL[t]).join(" + "),tipoList:tipos,temCap:cap.length>0,
       // Leads, CPL, faixas e Tx conv. do anúncio olham só as campanhas de captação
       leads:capD.leads,cpl:capD.cpl,txConvPg:capD.txConvPg};
   });
+  // ID de anúncio só na Base leads (sem linha na Base meta): linha própria.
+  const adKeysMeta=new Set(adBase.map(r=>r.adKey));
+  const orfaos={}; adLeads.filter(l=>l.hasUtm&&!adKeysMeta.has(l.adKey)).forEach(l=>{(orfaos[l.adName+" · id "+(l.adId||"?")]=orfaos[l.adName+" · id "+(l.adId||"?")]||[]).push(l);});
+  Object.entries(orfaos).forEach(([n,ls])=>adsAll.push({...packOf([],ls),adName:n,adKeys:new Set(ls.map(l=>l.adKey)),igUrl:"",nCamps:new Set(ls.map(l=>l.campKey)).size,
+    tipos:"Captação",tipoList:["captacao"],temCap:true,semMeta:true}));
   const aq=S.adSearch.trim().toLowerCase();
   const ads=sortBy(aq?adsAll.filter(a=>a.adName.toLowerCase().includes(aq)):adsAll,S.aSort);
   const adSel=S.selectedAds.size>0;
-  const adNames=new Set(adSel?[...S.selectedAds]:ads.map(a=>a.adName));
+  const adRowsVis=adSel?adsAll.filter(a=>S.selectedAds.has(a.adName)):ads;
+  const adNames=new Set(adRowsVis.map(a=>a.adName));
+  const adKeysVis=new Set(adRowsVis.flatMap(a=>[...a.adKeys]));
   const adTotRows=adBase.filter(r=>adNames.has(r.adName));
-  const adTotLeads=adLeads.filter(l=>adNames.has(l.adName));
+  const adTotLeads=adLeads.filter(l=>adKeysVis.has(l.adKey));
   const adTot=packOf(adTotRows,adTotLeads);
   const adTotCap=packOf(adTotRows.filter(r=>r.tipo==="captacao"),adTotLeads);
 
@@ -1244,13 +1282,13 @@ function renderAnuncios(){
         <thead><tr><th style="width:36px"></th><th onclick="sortCampanhas('campName')">Campanha</th>${metricCols(true)}</tr></thead>
         <tbody>
           ${camps.length===0?`<tr><td colspan="20" style="text-align:center;color:var(--hint);padding:20px">Sem dados de campanhas no período</td></tr>`:
-          camps.map(c=>{const sel=S.selectedCamps.has(c.campName);const isWa=c.tipo==="whatsapp";
+          camps.map(c=>{const sel=S.selectedCamps.has(c.campKey);const isWa=c.tipo==="whatsapp";
             if(c.semUtmRow)return `<tr style="background:rgba(148,163,184,.04)">
               <td></td><td style="color:var(--muted)">${SEM_UTM} <span style="font-size:10px;color:var(--hint)">(leads sem campanha — ex.: cadastros de 07→11/10)</span></td>
               ${td("—")}${td(fInt(c.leads))}${td("—")}${td("—")}${td("—")}${td("—")}${td("—")}${td("—")}${qualTds(c,false)}</tr>`;
-            return `<tr onclick="toggleCamp('${escJs(c.campName)}')" style="cursor:pointer;background:${sel?"rgba(16,185,129,.1)":"transparent"}">
+            return `<tr onclick="toggleCamp('${escJs(c.campKey)}')" style="cursor:pointer;background:${sel?"rgba(16,185,129,.1)":"transparent"}">
               <td>${chkBox(sel)}</td>
-              <td style="color:${sel?"#10b981":"var(--text)"};font-weight:${sel?600:400}">${esc(c.campName)}</td>
+              <td style="color:${sel?"#10b981":"var(--text)"};font-weight:${sel?600:400}">${esc(c.campName)}${c.semMeta?` <span style="font-size:10px;color:#fbbf24">(sem linha na Base meta)</span>`:""}</td>
               ${metricTds(c,isWa)}</tr>`;}).join("")}
         </tbody>
         ${camps.length?`<tfoot><tr style="background:rgba(148,163,184,.10);border-top:2px solid var(--border)">
@@ -1285,7 +1323,7 @@ function renderAnuncios(){
         </tr></tfoot>`:""}
       </table>
     </div></div>
-    <div style="font-size:10px;color:var(--hint);margin-top:8px">O mesmo criativo roda em mais de uma campanha — a linha do anúncio soma todas. Leads, Custo/lead, faixas e Tx conv. pg contam só as campanhas de captação. Leads ${S.hasLeadsBase?"da Base leads, atribuídos pelo nome da campanha/anúncio da UTM":"do gerenciador"}.</div>
+    <div style="font-size:10px;color:var(--hint);margin-top:8px">O mesmo criativo roda em mais de uma campanha — a linha do anúncio soma todas. Leads, Custo/lead, faixas e Tx conv. pg contam só as campanhas de captação. Leads ${S.hasLeadsBase?"da Base leads, ligados pelo ID da campanha e do anúncio da UTM":"do gerenciador"}.</div>
 
     ${selAds.length?`
     <div style="margin-top:22px">
@@ -1515,6 +1553,7 @@ function renderResumo(){
   const realToday=todayISO(), today=realToday;
   const dow=new Date(today+"T12:00:00Z").getUTCDay(); // 0=dom … 5=sex
   const edIni=addDaysISO(today,-((dow-5+7)%7));
+  const yest=addDaysISO(today,-1);
   const first=S.dates[0]||CONFIG.planoInicio;
   const blocks=[
     // Total segue o filtro de datas do cabeçalho. O planejado conta só os dias
@@ -1523,6 +1562,7 @@ function renderResumo(){
       plan:planRange(S.startDate>CONFIG.planoInicio?S.startDate:CONFIG.planoInicio,S.endDate<realToday?S.endDate:realToday)},
     {key:"edicao",title:"🔁 Essa edição",txt:"*🔁 Essa edição*",dateLbl:`${fDateBR(edIni)} a ${fDateBR(today)}`,p:periodPack(edIni,today),
       plan:planRange(edIni>CONFIG.planoInicio?edIni:CONFIG.planoInicio,today)},
+    {key:"ontem",title:"⬅️ Ontem",txt:"*⬅️ Ontem*",dateLbl:fDateBR(yest),p:periodPack(yest,yest),plan:planForDate(yest)},
     {key:"hoje",title:"⬇️ Hoje",txt:"*⬇️ Hoje*",dateLbl:fDateBR(today),p:periodPack(today,today),plan:planForDate(today)},
   ];
   const fmtRow=(v,k,fmt)=>`${v==null?"—":fmt(v)}${M(k)!=null?`\t${metaEmoji(k,v)} (🎯 ${fmt(M(k))})`:""}`;
@@ -1612,7 +1652,7 @@ CPC:\t${fmtRow(p.wa.cpc,"cpcWhats",fBRL)}`;
     <div class="hdr" style="margin-bottom:16px">
       <div>
         <div class="hdr-title">Resumo diário</div>
-        <div class="hdr-sub">${CONFIG.nome} · Total (filtro): ${fDateBR(S.startDate)} a ${fDateBR(S.endDate)} · Essa edição: ${fDateBR(edIni)} a ${fDateBR(today)} · Hoje: ${fDateBR(today)}</div>
+        <div class="hdr-sub">${CONFIG.nome} · Total (filtro): ${fDateBR(S.startDate)} a ${fDateBR(S.endDate)} · Essa edição: ${fDateBR(edIni)} a ${fDateBR(today)} · Ontem: ${fDateBR(yest)} · Hoje: ${fDateBR(today)}</div>
       </div>
       <button onclick="copyText(document.getElementById('page-resumo')._resumoText,'.btn-copy-resumo')" class="btn-copy-resumo" style="display:inline-flex;align-items:center;gap:6px;padding:8px 18px;background:rgba(59,130,246,.18);border:1px solid rgba(96,165,250,.35);color:#93c5fd;border-radius:9px;cursor:pointer;font-size:12px;font-weight:600;font-family:'DM Sans',sans-serif">📋 Copiar resumo</button>
     </div>
