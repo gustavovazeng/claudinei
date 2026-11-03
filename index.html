@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<title>Live Quinta — Dashboard</title>
+<title>Dashboard Claudinei</title>
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@700&family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet"/>
 <style>
 <style>
@@ -195,7 +195,10 @@ input[type=date]::-webkit-calendar-picker-indicator{opacity:.4;cursor:pointer;fi
 
 <script>
 /* ════════════════════════════════════════════════════════════════════════
-   Live Quinta — Dashboard
+   Dashboard Claudinei — Live Quinta + Black Nov/26 (seletor no canto superior esquerdo)
+   Black Nov/26: mesma estrutura, planilha própria, Base leads no mesmo formato
+   da Live Quinta (com faixa e pesquisa; colunas/perguntas em CONFIG.leadCols e
+   CONFIG.perguntas). Abaixo, as notas da Live Quinta.
    Adaptado do modelo do mdi_out26 (mesmo visual, mesmos gráficos), mas
    enxuto pro formato da Live Quinta:
      • Valores em REAL (R$) — sem conversão de moeda.
@@ -213,20 +216,10 @@ input[type=date]::-webkit-calendar-picker-indicator{opacity:.4;cursor:pointer;fi
    ════════════════════════════════════════════════════════════════════════ */
 
 // ── Configuração ─────────────────────────────────────────────────────────
-const CONFIG = {
-  nome:"Live Quinta",
-  status:"ativo",
-  // Planilha "Base dash" — precisa estar como "qualquer pessoa com o link: leitor".
-  sheetId:"1PKdOd1MRwXdDeLNHFxkgdtXQmB6Vc4cBhbJYjE6xkps",
-  abaMeta:"Base meta",
-  abaLeads:"Base leads", // leads reais (cadastro + pesquisa + UTMs). null = usa os leads do gerenciador
-  // Planejamento: verba diária fixa, a partir de planoInicio. planoFim=null
-  // significa "segue até hoje" (live semanal, sem data de término).
-  planoDiario:145,
-  planoInicio:"2026-10-07",
-  planoFim:null,
-  // Metas — val:null = sem meta (sem farol). Preencher quando definidas.
-  metas:{
+// Cada dash é independente: planilha, planejamento, metas, filtros e estado
+// próprios. O seletor no canto superior esquerdo troca entre elas.
+const METAS_VAZIAS = () => ({
+
     cpl:          {val:null, higher:false}, // R$ por lead (captação)
     cpc:          {val:null, higher:false}, // R$ por clique (captação)
     ctr:          {val:null, higher:true},  // %
@@ -244,8 +237,60 @@ const CONFIG = {
     faixaD:       {val:null, higher:false},
     quiz:         {val:null, higher:true},  // % que terminou a pesquisa
     grupo:        {val:null, higher:true},  // % que clicou no grupo
+});
+const DASHES = {
+  quinta:{
+    id:"quinta",
+    nome:"Live Quinta",
+    status:"ativo",
+    // Planilha "Base dash" — precisa estar como "qualquer pessoa com o link: leitor".
+    sheetId:"1PKdOd1MRwXdDeLNHFxkgdtXQmB6Vc4cBhbJYjE6xkps",
+    abaMeta:"Base meta",
+    abaLeads:"Base leads", // leads reais (cadastro + pesquisa + UTMs). null = usa os leads do gerenciador
+    formatoLeads:"quinta", // colunas Cadastro/Nome/WhatsApp/Faixa/... + Origem completa
+    pesquisa:true,         // tem pesquisa de qualificação (faixas, aba Análise qualificação)
+    edicao:"sexta",        // Resumo: "Essa edição" = da última sexta até hoje
+    // Planejamento: verba diária fixa, a partir de planoInicio. planoFim=null
+    // significa "segue até hoje" (live semanal, sem data de término).
+    planoDiario:145,
+    planoInicio:"2026-10-07",
+    planoFim:null,
+    metas:METAS_VAZIAS(),
+  },
+  black:{
+    id:"black",
+    nome:"Black Nov/26",
+    status:"ativo",
+    sheetId:"1q-lak766-plDKiUweUNl4WkLcWGZKijHOXkYqREWE18",
+    abaMeta:"Base meta",
+    abaLeads:"Base leads",
+    formatoLeads:"quinta", // mesmo formato da Live Quinta (Inscrição, faixa, pesquisa, Origem completa)
+    pesquisa:true,         // tem pesquisa de qualificação (faixas, aba Análise qualificação)
+    // Nomes de coluna que mudam em relação à Live Quinta
+    leadCols:{cadastro:"Inscrição",grupo:"Clicou no botão do grupo",
+      mexe:"Mexe com",cabecas:"Cabeças",gabiru:"Gabiru",capital6:"Capital 6 meses",entra:"Como entra",aluno:"Já é aluno",
+      pagina:"Página",noGrupo:"Está no grupo"},
+    // Perguntas da pesquisa (aba Análise qualificação, % sobre quem respondeu)
+    perguntas:[["mexe","Mexe com"],["cabecas","Cabeças"],["gabiru","Gabiru"],["capital6","Capital 6 meses"],["entra","Como entra"],["aluno","Já é aluno"]],
+    // Distribuições extras sobre todas as leads
+    extrasLeads:[["pagina","Página"],["noGrupo","Está no grupo"]],
+    edicao:"lancamento",   // Resumo: "Lançamento inteiro" = do início da Black até hoje
+    // Sem planejamento por enquanto: planoDiario:0. É só preencher (R$/dia,
+    // início e fim) que a aba Planejado/Realizado liga sozinha.
+    planoDiario:0,
+    planoInicio:"2026-11-03",
+    planoFim:null,
+    metas:METAS_VAZIAS(),
   },
 };
+const DASH_ORDEM = ["quinta","black"];
+function dashInicial(){
+  const h=String(location.hash||"").replace(/^#/,"");
+  if(DASHES[h])return h;
+  try{ const v=localStorage.getItem("dashClaudinei.dash"); if(DASHES[v])return v; }catch(_){}
+  return "quinta";
+}
+let CONFIG = DASHES[dashInicial()];
 const M = k => (CONFIG.metas[k]||{}).val ?? null;
 const MH = k => (CONFIG.metas[k]||{}).higher;
 
@@ -288,7 +333,7 @@ const CHART_PLAN = "#8a96ab";
 const CHART_GAP  = "#f87171";
 
 // ── State ─────────────────────────────────────────────────────────────────
-const S = {
+function novoEstado(){ return {
   leads:[],          // Base leads, deduplicada por telefone: {date,ms,nome,phone,quiz,faixa,pontos,grupo,temp,campName,adsetName,adName,placement,utmSource,hasUtm,resp{...},formatoAntigo}
   leadsInfo:{linhas:0,duplicadas:0,semData:0,antigas:0},
   hasLeadsBase:false, leadsError:null, leadsAll:[],
@@ -304,8 +349,10 @@ const S = {
   selectedCamps:new Set(), selectedAds:new Set(),
   campSearch:"", adSearch:"",
   cSort:{col:"spend",dir:"desc"}, aSort:{col:"spend",dir:"desc"},
-  updated:null, loading:true, error:null,
-};
+  updated:null, loading:true, error:null, carregado:false,
+}; }
+let S = novoEstado();
+const ESTADOS = {}; ESTADOS[CONFIG.id]=S;
 
 // ── Date helpers (GMT-3 Brasil) ───────────────────────────────────────────
 function nowBR(){ return new Date(Date.now()-(3*60*60*1000)); }
@@ -427,6 +474,8 @@ const LEAD_COLS={cadastro:"Cadastro",nome:"Nome",whats:"WhatsApp",pesquisa:"Term
   faz:"O que faz",animais:"Animais/mês",terra:"Terra",capital:"Capital",dor:"Maior dor",comprou:"Já comprou produto",
   grupo:"Clicou no grupo",publico:"Público",campanha:"Campanha",conjunto:"Conjunto",anuncio:"Anúncio",posic:"Posicionamento",origem:"Origem completa"};
 // Perguntas da pesquisa (ordem em que aparecem na aba Análise qualificação)
+function leadCols(){ return {...LEAD_COLS,...(CONFIG.leadCols||{})}; }
+function perguntas(){ return CONFIG.perguntas||PERGUNTAS; }
 const PERGUNTAS=[["faz","O que faz"],["animais","Animais/mês"],["terra","Terra"],["capital","Capital"],["dor","Maior dor"],["comprou","Já comprou produto"]];
 const SEM_UTM="Sem UTM";
 function msToISO(ms){ const d=new Date(ms);return `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,"0")}-${String(d.getUTCDate()).padStart(2,"0")}`; }
@@ -468,7 +517,7 @@ function parseLeads(table){
   const info={linhas:0,duplicadas:0,semData:0,antigas:0};
   if(table.length<2)return{leads:[],info};
   const h=table[0].map(x=>x.trim());
-  const ix={}; for(const k in LEAD_COLS)ix[k]=h.indexOf(LEAD_COLS[k]);
+  const LC=leadCols(); const ix={}; for(const k in LC)ix[k]=h.indexOf(LC[k]);
   const all=[];
   for(const r of table.slice(1)){
     const g=k=>ix[k]>=0?(r[ix[k]]||"").trim():"";
@@ -486,7 +535,8 @@ function parseLeads(table){
     const campName=g("campanha"), origem=g("origem");
     const pub=g("publico").toLowerCase();
     const fx=g("faixa").toUpperCase();
-    const resp={}; for(const [k] of PERGUNTAS)resp[k]=g(k);
+    const resp={}; for(const [k] of perguntas())resp[k]=g(k);
+    const extra={}; for(const [k] of (CONFIG.extrasLeads||[]))extra[k]=g(k);
     all.push({...d,nome:g("nome"),phone:g("whats").replace(/\D/g,""),
       quiz:simNao(g("pesquisa")),faixa:/^[A-D]$/.test(fx)?fx:"",pontos:g("pontos")===""?null:parseNum(g("pontos")),
       grupo:simNao(g("grupo")),
@@ -494,7 +544,7 @@ function parseLeads(table){
       campName:campName||SEM_UTM,adsetName:g("conjunto"),adName:g("anuncio")||SEM_UTM,placement:g("posic"),
       // IDs vêm do sufixo "_id_<número>" da UTM: utm_medium = campanha, utm_term = conjunto, utm_content = anúncio
       campId:utmId(utmParam(origem,"utm_medium")),adsetId:utmId(utmParam(origem,"utm_term")),adId:utmId(utmParam(origem,"utm_content")),
-      utmSource:utmParam(origem,"utm_source"),hasUtm:!!campName,resp,formatoAntigo:false});
+      utmSource:utmParam(origem,"utm_source"),hasUtm:!!campName,resp,extra,formatoAntigo:false});
   }
   // Dedup por telefone (últimos 11 dígitos): vale o 1º cadastro da pessoa.
   all.sort((a,b)=>a.ms-b.ms);
@@ -507,18 +557,71 @@ function parseLeads(table){
   return{leads,info,all};
 }
 
+// Base leads no formato do pixel (Black): uma linha = um lead.
+// Colunas: Email, Telefone, Data "03/11/2026, 18:21:55", URL, UTM Source,
+// UTM Medium = campanha_id_<ID>, UTM Content = anúncio_id_<ID>,
+// UTM Term = conjunto_id_<ID>, Campos personalizados "Nome: … | Zap: …".
+// Linhas sem email/telefone também são leads (pessoas diferentes).
+const LEAD_COLS_PIXEL={email:"Email",tel:"Telefone",data:"Data",url:"URL",vkAd:"VK Ad ID",source:"UTM Source",
+  medium:"UTM Medium",campaign:"UTM Campaign",content:"UTM Content",term:"UTM Term",campos:"Campos personalizados"};
+function semSufixoId(v){ return String(v||"").replace(/_id_\d+\s*$/,"").trim(); }
+function campoPersonalizado(txt,chave){
+  const m=String(txt||"").split("|").map(x=>x.trim()).find(x=>x.toLowerCase().startsWith(chave.toLowerCase()+":"));
+  return m?m.slice(chave.length+1).trim():"";
+}
+function parseLeadsPixel(table){
+  const info={linhas:0,duplicadas:0,semData:0,antigas:0};
+  if(table.length<2)return{leads:[],info,all:[]};
+  const h=table[0].map(x=>x.trim());
+  const ix={}; for(const k in LEAD_COLS_PIXEL)ix[k]=h.indexOf(LEAD_COLS_PIXEL[k]);
+  const all=[];
+  for(const r of table.slice(1)){
+    if(!r.some(v=>String(v||"").trim()))continue;
+    const g=k=>ix[k]>=0?(r[ix[k]]||"").trim():"";
+    info.linhas++;
+    const d=parseCadastro(g("data")); if(!d){info.semData++;continue;}
+    const medium=g("medium"), content=g("content"), term=g("term"), campos=g("campos");
+    const campName=semSufixoId(medium), adName=semSufixoId(content);
+    const campId=utmId(medium), adId=utmId(content)||g("vkAd");
+    all.push({...d,nome:campoPersonalizado(campos,"Nome"),email:g("email"),
+      phone:(g("tel")||campoPersonalizado(campos,"Zap")).replace(/\D/g,""),
+      aluno:campoPersonalizado(campos,"Aluno"),pagina:g("url"),
+      quiz:null,faixa:"",pontos:null,grupo:null,
+      temp:campaignTemperature(campName),
+      campName:campName||SEM_UTM,adsetName:semSufixoId(term),adName:adName||SEM_UTM,placement:g("source"),
+      campId,adsetId:utmId(term),adId,utmSource:g("source"),hasUtm:!!(campId||campName),resp:{},formatoAntigo:false});
+  }
+  // Dedup só quando há telefone (mesma pessoa cadastrada duas vezes).
+  all.sort((a,b)=>a.ms-b.ms);
+  const vistos=new Set(), leads=[];
+  for(const l of all){
+    const k=l.phone?l.phone.slice(-11):null;
+    if(k&&vistos.has(k)){info.duplicadas++;continue;}
+    if(k)vistos.add(k); leads.push(l);
+  }
+  return{leads,info,all};
+}
+
 // ── Carregamento ──────────────────────────────────────────────────────────
 async function loadData(){
-  S.loading=true; S.error=null; render();
+  const meuS=S, meuCfg=CONFIG;
+  S.buscando=true; S.loading=true; S.error=null; render();
+  let metaCsv=null, leadsRes=null, erroFetch=null;
   try{
-    const [metaCsv,leadsRes]=await Promise.all([
+    [metaCsv,leadsRes]=await Promise.all([
       fetchSheetCSV(CONFIG.abaMeta),
       CONFIG.abaLeads?fetchSheetCSV(CONFIG.abaLeads).then(t=>({ok:true,t}),e=>({ok:false,e})):Promise.resolve(null),
     ]);
+  }catch(e){ erroFetch=e; }
+  // O usuário pode ter trocado de dash enquanto carregava: processa no estado
+  // e na config de quem pediu e depois volta pra dash que está na tela.
+  const naTela={S,CONFIG}; S=meuS; CONFIG=meuCfg;
+  try{
+    if(erroFetch)throw erroFetch;
     // Base leads: se falhar, a dash segue com os leads do gerenciador.
     S.hasLeadsBase=false; S.leadsError=null; S.leads=[];
     if(leadsRes&&leadsRes.ok){
-      const {leads,info,all}=parseLeads(parseCSVText(leadsRes.t));
+      const {leads,info,all}=(CONFIG.formatoLeads==="pixel"?parseLeadsPixel:parseLeads)(parseCSVText(leadsRes.t));
       S.leads=leads; S.leadsAll=all; S.leadsInfo=info; S.hasLeadsBase=true;
     }else if(leadsRes){ S.leadsError=String(leadsRes.e&&leadsRes.e.message||leadsRes.e); console.error(leadsRes.e); }
     const table=parseCSVText(metaCsv);
@@ -563,7 +666,8 @@ async function loadData(){
       : "Erro ao carregar dados do Google Sheets: "+msg;
     console.error(e);
   }
-  S.loading=false;
+  S.loading=false; S.carregado=true; S.buscando=false;
+  S=naTela.S; CONFIG=naTela.CONFIG;
   render();
 }
 
@@ -695,17 +799,40 @@ function preservaFoco(fn){
 }
 
 const SUB_TABS_CAPTACAO=[["principal","⊞ Principal"],["anuncios","◈ Campanhas e anúncios"],["metricas","📶 Métricas do Tráfego"],["leads","🎯 Análise qualificação"]];
+function subTabs(){ return SUB_TABS_CAPTACAO.filter(([k])=>k!=="leads"||CONFIG.pesquisa!==false); }
+let menuDashAberto=false;
+function toggleMenuDash(ev){ if(ev)ev.stopPropagation(); menuDashAberto=!menuDashAberto; renderHeader(); }
+function trocaDash(id){
+  menuDashAberto=false;
+  if(!DASHES[id]){ renderHeader(); return; }
+  if(id===CONFIG.id){ renderHeader(); return; }
+  ESTADOS[CONFIG.id]=S;
+  CONFIG=DASHES[id];
+  S=ESTADOS[id]||(ESTADOS[id]=novoEstado());
+  try{ localStorage.setItem("dashClaudinei.dash",id); }catch(_){}
+  try{ history.replaceState(null,"","#"+id); }catch(_){}
+  document.title=`${CONFIG.nome} — Dashboard`;
+  window.scrollTo(0,0);
+  if(!S.carregado&&!S.buscando)loadData(); else render();
+}
+document.addEventListener("click",e=>{ if(menuDashAberto&&!e.target.closest("#funil-wrap")){ menuDashAberto=false; renderHeader(); } });
+document.addEventListener("keydown",e=>{ if(menuDashAberto&&e.key==="Escape"){ menuDashAberto=false; renderHeader(); } });
 function renderHeader(){
   const wrap=document.getElementById("funil-wrap");
-  if(wrap) wrap.innerHTML=`<div class="funil-btn" style="cursor:default"><span class="funil-dot"></span>
-    <span><span class="funil-name">${CONFIG.nome}</span><br/><span class="funil-status">${CONFIG.status}</span></span></div>`;
+  if(wrap) wrap.innerHTML=`<button type="button" class="funil-btn" onclick="toggleMenuDash(event)" aria-haspopup="true" aria-expanded="${menuDashAberto}">
+      <span class="funil-dot${CONFIG.status==="ativo"?"":" off"}"></span>
+      <span style="text-align:left"><span class="funil-name">${esc(CONFIG.nome)}</span><br/><span class="funil-status${CONFIG.status==="ativo"?"":" off"}">${esc(CONFIG.status)}</span></span>
+      <span class="funil-caret">▼</span></button>
+    ${menuDashAberto?`<div class="funil-menu" role="menu">${DASH_ORDEM.map(id=>{const d=DASHES[id];return `<button type="button" role="menuitem" class="funil-item${id===CONFIG.id?" active":""}" onclick="trocaDash('${id}')">
+      <span class="funil-dot${d.status==="ativo"?"":" off"}"></span>
+      <span><span class="funil-item-name">${esc(d.nome)}</span><br/><span class="funil-item-status">${esc(d.status)}</span></span></button>`;}).join("")}</div>`:""}`;
   const ids=["captacao","planoreal","resumo"];
   document.querySelectorAll("#hdr-tabs .htab").forEach((btn,i)=>btn.classList.toggle("htab-active",ids[i]===S.currentPage));
   const subEl=document.getElementById("subnav-captacao");
   if(subEl){
     if(S.currentPage==="captacao"){
       subEl.style.display="flex";
-      subEl.innerHTML=SUB_TABS_CAPTACAO.map(([k,lbl])=>`<button class="htab${S.currentSubPage===k?" htab-active":""}" onclick="navSub('${k}')">${lbl}</button>`).join("");
+      subEl.innerHTML=subTabs().map(([k,lbl])=>`<button class="htab${S.currentSubPage===k?" htab-active":""}" onclick="navSub('${k}')">${lbl}</button>`).join("");
     }else{ subEl.style.display="none"; subEl.innerHTML=""; }
   }
   const QUICKS=["hoje","ontem","3d","7d","mespassado","mes"];
@@ -906,6 +1033,7 @@ function colsNotice(){
   return falta.length?`<div class="notice">⚠️ A aba "${CONFIG.abaMeta}" está sem a(s) coluna(s): ${falta.join("; ")}.</div>`:"";
 }
 function temLeads(){ return S.hasLeadsBase||S.has.leads; }
+function temPesq(){ return S.hasLeadsBase&&CONFIG.pesquisa!==false; }
 function leadsFonte(){ return S.hasLeadsBase?"Base leads":"gerenciador (pixel)"; }
 const CHART_FAIXA={A:"#34d399",B:"#60a5fa",C:"#fbbf24",D:"#f87171"};
 function barRow(lbl,n,total,color){
@@ -1015,7 +1143,7 @@ function renderPrincipal(){
   const nClass=S.hasLeadsBase?filterLeads({start:S.startDate,end:S.endDate,temp}).filter(l=>l.temp).length:null;
   const nTemp=pctv=>pctv==null||nClass==null?"":`${fInt(Math.round(pctv*nClass/100))} de ${fInt(nClass)} classificadas`;
   const investColor=planPer>0?statusColor(p.total.spend,planPer,false):"var(--text-strong)";
-  const subFx=L=>S.hasLeadsBase?[M("faixa"+L)!=null?`meta ${M("faixa"+L)}%`:"",`${fInt(filterLeads({start:S.startDate,end:S.endDate,temp}).filter(l=>l.faixa===L).length)} leads`].filter(Boolean).join(" · "):"";
+  const subFx=L=>temPesq()?[M("faixa"+L)!=null?`meta ${M("faixa"+L)}%`:"",`${fInt(filterLeads({start:S.startDate,end:S.endDate,temp}).filter(l=>l.faixa===L).length)} leads`].filter(Boolean).join(" · "):"";
   const kpiPct=(lbl,v,k,sub)=>kpiCard(lbl,fPctOrDash(v),[sub,M(k)!=null?`meta ${M(k)}%`:""].filter(Boolean).join(" · "),M(k)!=null&&v!=null?metaColor(k,v):"var(--text-strong)",false,v,M(k),MH(k));
   const waVis=temp==="todos"||temp==="quente"||p.wa.spend>0;
 
@@ -1035,17 +1163,17 @@ function renderPrincipal(){
       ${kpiCard("Leads captados",temLeads()?fInt(c.leads):"—",S.hasLeadsBase?[`${fInt(c.semUtm)} sem UTM`,`${fInt(leadsSemDedup)} leads totais (sem dedup)`,`gerenciador: ${fInt(c.leadsGer)}`].join(" · "):"gerenciador (pixel)")}
       ${kpiCard("Custo/lead",fBRLOrDash(c.cpl),[M("cpl")!=null?`meta ${fBRL(M("cpl"))}`:"","investimento de captação ÷ leads"].filter(Boolean).join(" · "),M("cpl")!=null&&c.cpl!=null?metaColor("cpl",c.cpl):"var(--text-strong)",false,c.cpl,M("cpl"),false)}
     </div>
-    ${S.hasLeadsBase?`
+    ${temPesq()?`
     <div class="g4" style="margin-bottom:13px">
       ${["A","B","C","D"].map(L=>kpiCard("% Faixa "+L,fPctOrDash(c["faixa"+L]),subFx(L),M("faixa"+L)!=null&&c["faixa"+L]!=null?metaColor("faixa"+L,c["faixa"+L]):"var(--text-strong)",false,c["faixa"+L],M("faixa"+L),MH("faixa"+L))).join("")}
     </div>`:""}
     <div class="g4">
-      ${S.hasLeadsBase?kpiPct("% Resposta da pesquisa",c.quizPct,"quiz",`${fInt(c.nResp)} de ${fInt(c.nComInfo)}`):kpiMeta("Tx conv. página",c.txConvPg,fPct,"txConvPg")}
+      ${temPesq()?kpiPct("% Resposta da pesquisa",c.quizPct,"quiz",`${fInt(c.nResp)} de ${fInt(c.nComInfo)}`):kpiMeta("Tx conv. página",c.txConvPg,fPct,"txConvPg")}
       ${kpiPct("Tx quente",c.quentePct,"quente",nTemp(c.quentePct))}
       ${kpiPct("Tx morno",c.mornoPct,"morno",nTemp(c.mornoPct))}
       ${kpiPct("Tx frio",c.frioPct,"frio",nTemp(c.frioPct))}
     </div>
-    <div class="section-lbl" style="margin-top:12px">% Faixa A/B/C/D: calculadas só sobre quem tem faixa. % resposta da pesquisa: só sobre leads com essa informação (os cadastros antigos de 07→11/10 ficam fora). Tx quente/morno/frio saem do público da lead e usam como denominador só as leads classificadas — lead sem UTM fica fora, então quente + morno + frio fecha 100%.</div>
+    ${temPesq()?`<div class="section-lbl" style="margin-top:12px">% Faixa A/B/C/D: calculadas só sobre quem tem faixa. % resposta da pesquisa: só sobre leads com essa informação ${CONFIG.id==="quinta"?" (os cadastros antigos de 07→11/10 ficam fora)":""}. Tx quente/morno/frio saem do público da lead e usam como denominador só as leads classificadas — lead sem UTM fica fora, então quente + morno + frio fecha 100%.</div>`:`<div class="section-lbl" style="margin-top:12px">Tx quente/morno/frio saem da temperatura no nome da campanha da lead e usam como denominador só as leads classificadas — lead sem UTM fica fora, então quente + morno + frio fecha 100%.</div>`}
 
     <div class="cc" style="margin-top:6px;position:relative">
       <div class="ch">
@@ -1073,7 +1201,7 @@ function renderPrincipal(){
       ${S.showGap?`<div style="font-size:10px;color:var(--hint);margin-top:8px">GAP % = (leads do gerenciador − leads da Base leads) ÷ leads da Base leads. Positivo = o gerenciador reportou mais leads do que entraram na planilha.</div>`:""}
     </div>
 
-    ${S.hasLeadsBase?`
+    ${temPesq()?`
     <div class="cc" style="margin-top:12px;position:relative">
       <div class="ch">
         <span class="ct">% Faixa por dia — ${tempLabel}</span>
@@ -1168,7 +1296,7 @@ function adResumoBlock(a){
   L.push(`CPM:\t${fBRLOrDash(a.cpm)}`);
   L.push(`Connect Rate:\t${fPctOrDash(a.connectRate)}`);
   if(a.temCap)L.push(`Tx conv. página:\t${fPctOrDash(a.txConvPg)}`);
-  if(a.temCap&&S.hasLeadsBase){ L.push(``); ["A","B","C","D"].forEach(F=>L.push(`Faixa ${F}:\t${fPctOrDash(a["faixa"+F])}`)); L.push(`Tx resp. pesquisa:\t${fPctOrDash(a.quizPct)}`); }
+  if(a.temCap&&temPesq()){ L.push(``); ["A","B","C","D"].forEach(F=>L.push(`Faixa ${F}:\t${fPctOrDash(a["faixa"+F])}`)); L.push(`Tx resp. pesquisa:\t${fPctOrDash(a.quizPct)}`); }
   L.push(`__________________________`);
   return L.join("\n");
 }
@@ -1250,8 +1378,8 @@ function renderAnuncios(){
   }
   const td=(v,color)=>`<td class="mono" style="text-align:right${color?";color:"+color:""}">${v}</td>`;
   const tdT=(v)=>`<td class="mono" style="text-align:right;font-weight:700;color:var(--text-strong)">${v}</td>`;
-  const metricCols=isCamp=>`${th("spend","Investimento",isCamp)}${th("leads","Leads",isCamp)}${th("cpl","Custo/lead",isCamp)}${th("cpc","CPC",isCamp)}${th("ctr","CTR",isCamp)}${th("cpm","CPM",isCamp)}${th("connectRate","Connect",isCamp)}${th("txConvPg","Tx conv. pg",isCamp)}${S.hasLeadsBase?`${th("faixaA","Faixa A",isCamp)}${th("faixaB","Faixa B",isCamp)}${th("faixaC","Faixa C",isCamp)}${th("faixaD","Faixa D",isCamp)}${th("quizPct","% pesquisa",isCamp)}${th("grupoPct","% grupo",isCamp)}`:""}`;
-  const qualTds=(x,isWa,cell=td)=>S.hasLeadsBase?["faixaA","faixaB","faixaC","faixaD","quizPct","grupoPct"].map(k=>cell(isWa?"—":fPctOrDash(x[k]),isWa||cell!==td?"":metaColor(k==="quizPct"?"quiz":k==="grupoPct"?"grupo":k,x[k]))).join(""):"";
+  const metricCols=isCamp=>`${th("spend","Investimento",isCamp)}${th("leads","Leads",isCamp)}${th("cpl","Custo/lead",isCamp)}${th("cpc","CPC",isCamp)}${th("ctr","CTR",isCamp)}${th("cpm","CPM",isCamp)}${th("connectRate","Connect",isCamp)}${th("txConvPg","Tx conv. pg",isCamp)}${temPesq()?`${th("faixaA","Faixa A",isCamp)}${th("faixaB","Faixa B",isCamp)}${th("faixaC","Faixa C",isCamp)}${th("faixaD","Faixa D",isCamp)}${th("quizPct","% pesquisa",isCamp)}${th("grupoPct","% grupo",isCamp)}`:""}`;
+  const qualTds=(x,isWa,cell=td)=>temPesq()?["faixaA","faixaB","faixaC","faixaD","quizPct","grupoPct"].map(k=>cell(isWa?"—":fPctOrDash(x[k]),isWa||cell!==td?"":metaColor(k==="quizPct"?"quiz":k==="grupoPct"?"grupo":k,x[k]))).join(""):"";
   const metricTds=(x,isWa)=>`${td(fBRL(x.spend))}${td(isWa||!temLeads()?"—":fInt(x.leads))}${td(isWa?"—":fBRLOrDash(x.cpl),isWa?"":metaColor("cpl",x.cpl))}${td(fBRLOrDash(x.cpc))}${td(fPctOrDash(x.ctr))}${td(fBRLOrDash(x.cpm))}${td(fPctOrDash(x.connectRate))}${td(isWa?"—":fPctOrDash(x.txConvPg))}${qualTds(x,isWa)}`;
   const searchBox=(id,fn,val,ph)=>`<div style="margin-bottom:10px"><input id="${id}" oninput="${fn}(this.value)" value="${esc(val)}" placeholder="${ph}" style="width:100%;padding:8px 12px;background:var(--card);border:1px solid var(--border);border-radius:9px;color:var(--text);font-size:12px;font-family:'DM Sans',sans-serif;outline:none"/></div>`;
   const btnClear=(fn,n)=>`<button onclick="${fn}()" style="font-size:10px;padding:3px 9px;border:1px solid rgba(239,68,68,.4);background:rgba(239,68,68,.08);color:#f87171;border-radius:5px;cursor:pointer;font-family:'DM Sans',sans-serif">✕ Limpar seleção (${n})</button>`;
@@ -1284,7 +1412,7 @@ function renderAnuncios(){
           ${camps.length===0?`<tr><td colspan="20" style="text-align:center;color:var(--hint);padding:20px">Sem dados de campanhas no período</td></tr>`:
           camps.map(c=>{const sel=S.selectedCamps.has(c.campKey);const isWa=c.tipo==="whatsapp";
             if(c.semUtmRow)return `<tr style="background:rgba(148,163,184,.04)">
-              <td></td><td style="color:var(--muted)">${SEM_UTM} <span style="font-size:10px;color:var(--hint)">(leads sem campanha — ex.: cadastros de 07→11/10)</span></td>
+              <td></td><td style="color:var(--muted)">${SEM_UTM} <span style="font-size:10px;color:var(--hint)">(leads sem campanha${CONFIG.id==="quinta"?" — ex.: cadastros de 07→11/10":""})</span></td>
               ${td("—")}${td(fInt(c.leads))}${td("—")}${td("—")}${td("—")}${td("—")}${td("—")}${td("—")}${qualTds(c,false)}</tr>`;
             return `<tr onclick="toggleCamp('${escJs(c.campKey)}')" style="cursor:pointer;background:${sel?"rgba(16,185,129,.1)":"transparent"}">
               <td>${chkBox(sel)}</td>
@@ -1425,7 +1553,7 @@ function faixaTable(title,ls,keyFn){
 }
 function renderLeads(){
   const el=document.getElementById("page-leads");if(!el)return;
-  if(!S.hasLeadsBase){
+  if(!temPesq()){
     el.innerHTML=`<div class="hdr"><div><div class="hdr-title">Análise qualificação</div></div></div>${leadsNotice()||`<div class="notice">A aba "${CONFIG.abaLeads}" ainda não foi carregada.</div>`}${foot("Análise qualificação")}`;
     return;
   }
@@ -1471,8 +1599,9 @@ function renderLeads(){
     <div class="section-lbl">Respostas da pesquisa — % sobre quem respondeu cada pergunta</div>
     <div class="g3" style="margin-bottom:16px">
       ${distBlock("Faixa",ls,l=>l.faixa,faixaColor)}
-      ${PERGUNTAS.map(([k,t])=>distBlock(t,comPesq,l=>l.resp[k],palFn)).join("")}
+      ${perguntas().map(([k,t])=>distBlock(t,comPesq,l=>l.resp[k],palFn)).join("")}
       ${distBlock("Clicou no grupo",ls,l=>l.grupo===true?"sim":l.grupo===false?"não":"",(k)=>k==="sim"?"#34d399":"#f87171")}
+      ${(CONFIG.extrasLeads||[]).map(([k,t])=>distBlock(t,ls,l=>(l.extra&&l.extra[k])||"",(v,i)=>v==="sim"?"#34d399":v==="não"?"#f87171":palFn(v,i))).join("")}
       ${distBlock("Posicionamento",ls.filter(l=>l.hasUtm),l=>l.placement,palFn)}
     </div>
 
@@ -1508,7 +1637,7 @@ function renderPlanoReal(){
     <div class="hdr" style="margin-bottom:6px">
       <div>
         <div class="hdr-title">Planejado / Realizado</div>
-        <div class="hdr-sub">R$ ${CONFIG.planoDiario}/dia desde ${fDateBR(CONFIG.planoInicio)} · investimento total (captação + WhatsApp) · leads da ${leadsFonte()} · atualizado em: ${S.updated||"—"}</div>
+        <div class="hdr-sub">${CONFIG.planoDiario?`R$ ${CONFIG.planoDiario}/dia desde ${fDateBR(CONFIG.planoInicio)}`:`sem planejamento definido ainda · a partir de ${fDateBR(CONFIG.planoInicio)}`} · investimento total (captação + WhatsApp) · leads da ${leadsFonte()} · atualizado em: ${S.updated||"—"}</div>
       </div>
       <div style="display:flex;align-items:center;gap:16px">${statusLegend()}</div>
     </div>
@@ -1552,7 +1681,10 @@ function renderResumo(){
   // (ou hoje, se hoje for sexta) até hoje. "Hoje" = o dia de hoje de verdade.
   const realToday=todayISO(), today=realToday;
   const dow=new Date(today+"T12:00:00Z").getUTCDay(); // 0=dom … 5=sex
-  const edIni=addDaysISO(today,-((dow-5+7)%7));
+  const lanc=CONFIG.edicao==="lancamento";
+  const lancIni=[S.dates[0],CONFIG.planoInicio].filter(Boolean).sort()[0]||today;
+  const edIni=lanc?lancIni:addDaysISO(today,-((dow-5+7)%7));
+  const edLbl=lanc?"Lançamento inteiro":"Essa edição", edIco=lanc?"🚀":"🔁";
   const yest=addDaysISO(today,-1);
   const first=S.dates[0]||CONFIG.planoInicio;
   const blocks=[
@@ -1560,7 +1692,7 @@ function renderResumo(){
     // do filtro que já passaram (até hoje) e que estão dentro do plano.
     {key:"tot",title:"📶 Total - Período filtrado",txt:"*-> 📶Total*",dateLbl:`${fDateBR(S.startDate)} a ${fDateBR(S.endDate)}`,p:periodPack(S.startDate,S.endDate),
       plan:planRange(S.startDate>CONFIG.planoInicio?S.startDate:CONFIG.planoInicio,S.endDate<realToday?S.endDate:realToday)},
-    {key:"edicao",title:"🔁 Essa edição",txt:"*🔁 Essa edição*",dateLbl:`${fDateBR(edIni)} a ${fDateBR(today)}`,p:periodPack(edIni,today),
+    {key:"edicao",title:`${edIco} ${edLbl}`,txt:`*${edIco} ${edLbl}*`,dateLbl:`${fDateBR(edIni)} a ${fDateBR(today)}`,p:periodPack(edIni,today),
       plan:planRange(edIni>CONFIG.planoInicio?edIni:CONFIG.planoInicio,today)},
     {key:"ontem",title:"⬅️ Ontem",txt:"*⬅️ Ontem*",dateLbl:fDateBR(yest),p:periodPack(yest,yest),plan:planForDate(yest)},
     {key:"hoje",title:"⬇️ Hoje",txt:"*⬇️ Hoje*",dateLbl:fDateBR(today),p:periodPack(today,today),plan:planForDate(today)},
@@ -1579,7 +1711,7 @@ Custo por lead:\t${fmtRow(p.cap.cpl,"cpl",fBRL)}
 
 Tx quente:\t${fmtRow(p.cap.quentePct,"quente",fPct)}
 Tx frio:\t${fmtRow(p.cap.frioPct,"frio",fPct)}
-${S.hasLeadsBase?`
+${temPesq()?`
 Faixa A:\t${fmtRow(p.cap.faixaA,"faixaA",fPct)}
 Faixa B:\t${fmtRow(p.cap.faixaB,"faixaB",fPct)}
 Faixa C:\t${fmtRow(p.cap.faixaC,"faixaC",fPct)}
@@ -1631,7 +1763,7 @@ CPC:\t${fmtRow(p.wa.cpc,"cpcWhats",fBRL)}`;
       <div style="height:8px"></div>
       ${row("Tx quente",fPctOrDash(p.cap.quentePct),"quente",p.cap.quentePct)}
       ${row("Tx frio",fPctOrDash(p.cap.frioPct),"frio",p.cap.frioPct)}
-      ${S.hasLeadsBase?`<div style="height:8px"></div>
+      ${temPesq()?`<div style="height:8px"></div>
       ${["A","B","C","D"].map(F=>row("Faixa "+F,fPctOrDash(p.cap["faixa"+F]),"faixa"+F,p.cap["faixa"+F])).join("")}
       ${row("Tx resp. pesquisa",fPctOrDash(p.cap.quizPct),"quiz",p.cap.quizPct)}
       ${row("Tx clique no grupo",fPctOrDash(p.cap.grupoPct),"grupo",p.cap.grupoPct)}`:""}
@@ -1652,7 +1784,7 @@ CPC:\t${fmtRow(p.wa.cpc,"cpcWhats",fBRL)}`;
     <div class="hdr" style="margin-bottom:16px">
       <div>
         <div class="hdr-title">Resumo diário</div>
-        <div class="hdr-sub">${CONFIG.nome} · Total (filtro): ${fDateBR(S.startDate)} a ${fDateBR(S.endDate)} · Essa edição: ${fDateBR(edIni)} a ${fDateBR(today)} · Ontem: ${fDateBR(yest)} · Hoje: ${fDateBR(today)}</div>
+        <div class="hdr-sub">${CONFIG.nome} · Total (filtro): ${fDateBR(S.startDate)} a ${fDateBR(S.endDate)} · ${edLbl}: ${fDateBR(edIni)} a ${fDateBR(today)} · Ontem: ${fDateBR(yest)} · Hoje: ${fDateBR(today)}</div>
       </div>
       <button onclick="copyText(document.getElementById('page-resumo')._resumoText,'.btn-copy-resumo')" class="btn-copy-resumo" style="display:inline-flex;align-items:center;gap:6px;padding:8px 18px;background:rgba(59,130,246,.18);border:1px solid rgba(96,165,250,.35);color:#93c5fd;border-radius:9px;cursor:pointer;font-size:12px;font-weight:600;font-family:'DM Sans',sans-serif">📋 Copiar resumo</button>
     </div>
@@ -1686,6 +1818,8 @@ function render(){
 let _rsz=null;
 window.addEventListener("resize",()=>{clearTimeout(_rsz);_rsz=setTimeout(()=>{if(!S.loading)render();},200);});
 
+document.title=`${CONFIG.nome} — Dashboard`;
+try{ history.replaceState(null,"","#"+CONFIG.id); }catch(_){}
 loadData();
 </script>
 </body>
