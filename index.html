@@ -274,7 +274,9 @@ const DASHES = {
     perguntas:[["mexe","Mexe com"],["cabecas","Cabeças"],["gabiru","Gabiru"],["capital6","Capital 6 meses"],["entra","Como entra"],["aluno","Já é aluno"]],
     // Distribuições extras sobre todas as leads
     extrasLeads:[["pagina","Página"],["noGrupo","Está no grupo"]],
-    edicao:"lancamento",   // Resumo: "Lançamento inteiro" = do início da Black até hoje
+    whatsapp:false,        // só campanhas de captação: sem filtro/blocos de WhatsApp
+    resumoBlocos:["tot","ontem","hoje"], // Resumo diário: Total, Ontem e Hoje
+    edicao:"lancamento",
     // Sem planejamento por enquanto: planoDiario:0. É só preencher (R$/dia,
     // início e fim) que a aba Planejado/Realizado liga sozinha.
     planoDiario:0,
@@ -799,6 +801,8 @@ function preservaFoco(fn){
 }
 
 const SUB_TABS_CAPTACAO=[["principal","⊞ Principal"],["anuncios","◈ Campanhas e anúncios"],["metricas","📶 Métricas do Tráfego"],["leads","🎯 Análise qualificação"]];
+function resumoBlocos(){ return CONFIG.resumoBlocos||["tot","edicao","ontem","hoje"]; }
+function temWhats(){ return CONFIG.whatsapp!==false; }
 function subTabs(){ return SUB_TABS_CAPTACAO.filter(([k])=>k!=="leads"||CONFIG.pesquisa!==false); }
 let menuDashAberto=false;
 function toggleMenuDash(ev){ if(ev)ev.stopPropagation(); menuDashAberto=!menuDashAberto; renderHeader(); }
@@ -1145,7 +1149,7 @@ function renderPrincipal(){
   const investColor=planPer>0?statusColor(p.total.spend,planPer,false):"var(--text-strong)";
   const subFx=L=>temPesq()?[M("faixa"+L)!=null?`meta ${M("faixa"+L)}%`:"",`${fInt(filterLeads({start:S.startDate,end:S.endDate,temp}).filter(l=>l.faixa===L).length)} leads`].filter(Boolean).join(" · "):"";
   const kpiPct=(lbl,v,k,sub)=>kpiCard(lbl,fPctOrDash(v),[sub,M(k)!=null?`meta ${M(k)}%`:""].filter(Boolean).join(" · "),M(k)!=null&&v!=null?metaColor(k,v):"var(--text-strong)",false,v,M(k),MH(k));
-  const waVis=temp==="todos"||temp==="quente"||p.wa.spend>0;
+  const waVis=temWhats()&&(temp==="todos"||temp==="quente"||p.wa.spend>0);
 
   el.innerHTML=`
     <div class="hdr">
@@ -1159,7 +1163,7 @@ function renderPrincipal(){
     ${leadsNotice()}
 
     <div class="g3" style="margin-bottom:13px">
-      ${kpiCard("Investimento",fBRL(p.total.spend),`planejado até hoje: ${fBRL(planPer)} · captação ${fBRL(c.spend)} · WhatsApp ${fBRL(p.wa.spend)}`,investColor,false,p.total.spend,planPer||null,false)}
+      ${kpiCard("Investimento",fBRL(p.total.spend),`planejado até hoje: ${fBRL(planPer)}${temWhats()?` · captação ${fBRL(c.spend)} · WhatsApp ${fBRL(p.wa.spend)}`:""}`,investColor,false,p.total.spend,planPer||null,false)}
       ${kpiCard("Leads captados",temLeads()?fInt(c.leads):"—",S.hasLeadsBase?[`${fInt(c.semUtm)} sem UTM`,`${fInt(leadsSemDedup)} leads totais (sem dedup)`,`gerenciador: ${fInt(c.leadsGer)}`].join(" · "):"gerenciador (pixel)")}
       ${kpiCard("Custo/lead",fBRLOrDash(c.cpl),[M("cpl")!=null?`meta ${fBRL(M("cpl"))}`:"","investimento de captação ÷ leads"].filter(Boolean).join(" · "),M("cpl")!=null&&c.cpl!=null?metaColor("cpl",c.cpl):"var(--text-strong)",false,c.cpl,M("cpl"),false)}
     </div>
@@ -1469,7 +1473,7 @@ function setMetricasTipo(t){ S.metricasTipo=t; renderMetricasTrafego(); }
 function setMetricasTemp(t){ S.metricasTemp=t; renderMetricasTrafego(); }
 function renderMetricasTrafego(){
   const el=document.getElementById("page-metricas");if(!el)return;
-  const tipo=S.metricasTipo, temp=S.metricasTemp;
+  const tipo=temWhats()?S.metricasTipo:"captacao", temp=S.metricasTemp;
   const f=(s,e)=>({start:s,end:e,tipo,temp});
   const today=todayISO(), y1=nDaysAgoISO(1), y3=nDaysAgoISO(3);
   const hoje=metrics(f(today,today)), ult3=metrics(f(y3,y1)), per=metrics(f(S.startDate,S.endDate));
@@ -1503,7 +1507,7 @@ function renderMetricasTrafego(){
         <div class="hdr-sub">${periodSub()} · atualizado em: ${S.updated||"—"}</div>
       </div>
     </div>
-    <div class="filters">${toggleGroup("Tipo",TIPO_OPTS,tipo,"setMetricasTipo")}${toggleGroup("Temperatura",TEMP_OPTS,temp,"setMetricasTemp")}</div>
+    <div class="filters">${temWhats()?toggleGroup("Tipo",TIPO_OPTS,tipo,"setMetricasTipo"):""}${toggleGroup("Temperatura",TEMP_OPTS,temp,"setMetricasTemp")}</div>
     ${S.error?`<div class="err">⚠️ ${S.error}</div>`:""}
     <div class="section-lbl" style="margin-top:0">Hoje — ${fDateBR(today)}</div>
     <div class="g4" style="margin-bottom:10px">${cards(hoje)}</div>
@@ -1637,7 +1641,7 @@ function renderPlanoReal(){
     <div class="hdr" style="margin-bottom:6px">
       <div>
         <div class="hdr-title">Planejado / Realizado</div>
-        <div class="hdr-sub">${CONFIG.planoDiario?`R$ ${CONFIG.planoDiario}/dia desde ${fDateBR(CONFIG.planoInicio)}`:`sem planejamento definido ainda · a partir de ${fDateBR(CONFIG.planoInicio)}`} · investimento total (captação + WhatsApp) · leads da ${leadsFonte()} · atualizado em: ${S.updated||"—"}</div>
+        <div class="hdr-sub">${CONFIG.planoDiario?`R$ ${CONFIG.planoDiario}/dia desde ${fDateBR(CONFIG.planoInicio)}`:`sem planejamento definido ainda · a partir de ${fDateBR(CONFIG.planoInicio)}`} · ${temWhats()?"investimento total (captação + WhatsApp)":"investimento total"} · leads da ${leadsFonte()} · atualizado em: ${S.updated||"—"}</div>
       </div>
       <div style="display:flex;align-items:center;gap:16px">${statusLegend()}</div>
     </div>
@@ -1696,9 +1700,38 @@ function renderResumo(){
       plan:planRange(edIni>CONFIG.planoInicio?edIni:CONFIG.planoInicio,today)},
     {key:"ontem",title:"⬅️ Ontem",txt:"*⬅️ Ontem*",dateLbl:fDateBR(yest),p:periodPack(yest,yest),plan:planForDate(yest)},
     {key:"hoje",title:"⬇️ Hoje",txt:"*⬇️ Hoje*",dateLbl:fDateBR(today),p:periodPack(today,today),plan:planForDate(today)},
-  ];
+  ].filter(b=>resumoBlocos().includes(b.key));
   const fmtRow=(v,k,fmt)=>`${v==null?"—":fmt(v)}${M(k)!=null?`\t${metaEmoji(k,v)} (🎯 ${fmt(M(k))})`:""}`;
+  // Modelo só captação (sem WhatsApp e sem o subtítulo "Página de captura")
+  function textBlockCap(b){
+    const {p,plan}=b;
+    return `${b.txt}${b.key==="tot"?"\t":""}
+
+Investimento total:\t${fBRL(p.total.spend)}\t(plan.: ${fBRL(plan)})
+
+Investimento:\t${fBRL(p.cap.spend)}
+Leads:\t${temLeads()?fInt(p.cap.leads):"—"}
+Custo por lead:\t${fmtRow(p.cap.cpl,"cpl",fBRL)}
+
+Tx quente:\t${fmtRow(p.cap.quentePct,"quente",fPct)}
+Tx frio:\t${fmtRow(p.cap.frioPct,"frio",fPct)}
+${temPesq()?`
+Faixa A:\t${fmtRow(p.cap.faixaA,"faixaA",fPct)}
+Faixa B:\t${fmtRow(p.cap.faixaB,"faixaB",fPct)}
+Faixa C:\t${fmtRow(p.cap.faixaC,"faixaC",fPct)}
+Faixa D:\t${fmtRow(p.cap.faixaD,"faixaD",fPct)}
+Tx resp. pesquisa:\t${fmtRow(p.cap.quizPct,"quiz",fPct)}
+Tx clique no grupo:\t${fmtRow(p.cap.grupoPct,"grupo",fPct)}
+`:""}
+CPC:\t${fmtRow(p.cap.cpc,"cpc",fBRL)}
+CTR:\t${fmtRow(p.cap.ctr,"ctr",fPct)}
+CPM:\t${fmtRow(p.cap.cpm,"cpm",fBRL)}
+
+Tx conv. página:\t${fmtRow(p.cap.txConvPg,"txConvPg",fPct)}
+Connect Rate:\t${fmtRow(p.cap.connectRate,"connectRate",fPct)}`;
+  }
   function textBlock(b){
+    if(!temWhats())return textBlockCap(b);
     const {p,plan}=b;
     return `${b.txt}${b.key==="tot"?"\t":b.key==="edicao"?`\t${fDate(edIni)} a ${fDate(today)}`:""}
 
@@ -1732,7 +1765,7 @@ Investimento:\t${fBRL(p.wa.spend)}
 Cliques no link:\t${fInt(p.wa.clicks)}
 CPC:\t${fmtRow(p.wa.cpc,"cpcWhats",fBRL)}`;
   }
-  const resumoText=`*${CONFIG.nome} - Resumo*\n\n${blocks[0].dateLbl}\n\n`+blocks.map(textBlock).join("\n---------------------\n");
+  const resumoText=`*${CONFIG.nome} - Resumo*\n\n${blocks[0].dateLbl}\n\n`+blocks.map(textBlock).join(temWhats()?"\n---------------------\n":"\n----------\n")+(temWhats()?"":"\n----------");
   el._resumoText=resumoText;
 
   function row(lbl,val,k,raw){
@@ -1756,7 +1789,7 @@ CPC:\t${fmtRow(p.wa.cpc,"cpcWhats",fBRL)}`;
         <span style="font-family:'JetBrains Mono',monospace;font-size:13px;color:${plan?statusColor(p.total.spend,plan,true):"var(--text-strong)"}">${fBRL(p.total.spend)}</span>
         <span style="font-size:10px;color:var(--hint)">plan.: ${fBRL(plan)}${plan?` · ${fPct(p.total.spend/plan*100)}`:""}</span>
       </div>
-      ${sub("📥 Página de captura")}
+      ${temWhats()?sub("📥 Página de captura"):""}
       ${row("Investimento",fBRL(p.cap.spend))}
       ${row("Leads",temLeads()?fInt(p.cap.leads):"—")}
       ${row("Custo por lead",fBRLOrDash(p.cap.cpl),"cpl",p.cap.cpl)}
@@ -1774,17 +1807,17 @@ CPC:\t${fmtRow(p.wa.cpc,"cpcWhats",fBRL)}`;
       <div style="height:8px"></div>
       ${row("Tx conv. página",fPctOrDash(p.cap.txConvPg),"txConvPg",p.cap.txConvPg)}
       ${row("Connect Rate",fPctOrDash(p.cap.connectRate),"connectRate",p.cap.connectRate)}
-      ${sub("💬 Tráfego WhatsApp")}
+      ${temWhats()?`${sub("💬 Tráfego WhatsApp")}
       ${row("Investimento",fBRL(p.wa.spend))}
       ${row("Cliques no link",fInt(p.wa.clicks))}
-      ${row("CPC",fBRLOrDash(p.wa.cpc),"cpcWhats",p.wa.cpc)}
+      ${row("CPC",fBRLOrDash(p.wa.cpc),"cpcWhats",p.wa.cpc)}`:""}
     </div>`;
   }
   el.innerHTML=`
     <div class="hdr" style="margin-bottom:16px">
       <div>
         <div class="hdr-title">Resumo diário</div>
-        <div class="hdr-sub">${CONFIG.nome} · Total (filtro): ${fDateBR(S.startDate)} a ${fDateBR(S.endDate)} · ${edLbl}: ${fDateBR(edIni)} a ${fDateBR(today)} · Ontem: ${fDateBR(yest)} · Hoje: ${fDateBR(today)}</div>
+        <div class="hdr-sub">${CONFIG.nome} · Total (filtro): ${fDateBR(S.startDate)} a ${fDateBR(S.endDate)} ·${resumoBlocos().includes("edicao")?` ${edLbl}: ${fDateBR(edIni)} a ${fDateBR(today)} ·`:""} Ontem: ${fDateBR(yest)} · Hoje: ${fDateBR(today)}</div>
       </div>
       <button onclick="copyText(document.getElementById('page-resumo')._resumoText,'.btn-copy-resumo')" class="btn-copy-resumo" style="display:inline-flex;align-items:center;gap:6px;padding:8px 18px;background:rgba(59,130,246,.18);border:1px solid rgba(96,165,250,.35);color:#93c5fd;border-radius:9px;cursor:pointer;font-size:12px;font-weight:600;font-family:'DM Sans',sans-serif">📋 Copiar resumo</button>
     </div>
