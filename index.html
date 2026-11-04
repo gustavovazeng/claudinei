@@ -277,11 +277,19 @@ const DASHES = {
     whatsapp:false,        // só campanhas de captação: sem filtro/blocos de WhatsApp
     resumoBlocos:["tot","ontem","hoje"], // Resumo diário: Total, Ontem e Hoje
     edicao:"lancamento",
-    // Sem planejamento por enquanto: planoDiario:0. É só preencher (R$/dia,
+    // Planejamento em faixas (R$/dia por período, datas inclusivas).
+    // A verba nova de R$ 920 começa no dia 10. Total do plano: R$ 15.500 —
+    // a diferença (R$ 295) sai do dia 24, que fica com R$ 625.
+    planoFaixas:[
+      {inicio:"2026-11-03",fim:"2026-11-09",diario:285},
+      {inicio:"2026-11-10",fim:"2026-11-23",diario:920},
+      {inicio:"2026-11-24",fim:"2026-11-24",diario:625},
+    ],
+    // planoDiario/planoInicio/planoFim abaixo ficam derivados das faixas.
     // início e fim) que a aba Planejado/Realizado liga sozinha.
     planoDiario:0,
     planoInicio:"2026-11-03",
-    planoFim:null,
+    planoFim:"2026-11-24",
     metas:METAS_VAZIAS(),
   },
 };
@@ -761,6 +769,7 @@ function periodDates(start,end){ return S.dates.filter(d=>d>=start&&d<=end); }
 
 // ── Planejamento ──────────────────────────────────────────────────────────
 function planForDate(d){
+  if(CONFIG.planoFaixas){ const f=CONFIG.planoFaixas.find(x=>d>=x.inicio&&d<=x.fim); return f?f.diario:0; }
   if(!CONFIG.planoDiario||d<CONFIG.planoInicio)return 0;
   if(CONFIG.planoFim&&d>CONFIG.planoFim)return 0;
   return CONFIG.planoDiario;
@@ -1641,7 +1650,7 @@ function renderPlanoReal(){
     <div class="hdr" style="margin-bottom:6px">
       <div>
         <div class="hdr-title">Planejado / Realizado</div>
-        <div class="hdr-sub">${CONFIG.planoDiario?`R$ ${CONFIG.planoDiario}/dia desde ${fDateBR(CONFIG.planoInicio)}`:`sem planejamento definido ainda · a partir de ${fDateBR(CONFIG.planoInicio)}`} · ${temWhats()?"investimento total (captação + WhatsApp)":"investimento total"} · leads da ${leadsFonte()} · atualizado em: ${S.updated||"—"}</div>
+        <div class="hdr-sub">${CONFIG.planoFaixas?CONFIG.planoFaixas.map(f=>f.inicio===f.fim?`R$ ${fInt(f.diario)} em ${fDate(f.inicio)}`:`R$ ${fInt(f.diario)}/dia de ${fDate(f.inicio)} a ${fDate(f.fim)}`).join(" · "):CONFIG.planoDiario?`R$ ${CONFIG.planoDiario}/dia desde ${fDateBR(CONFIG.planoInicio)}`:`sem planejamento definido ainda · a partir de ${fDateBR(CONFIG.planoInicio)}`} · ${temWhats()?"investimento total (captação + WhatsApp)":"investimento total"} · leads da ${leadsFonte()} · atualizado em: ${S.updated||"—"}</div>
       </div>
       <div style="display:flex;align-items:center;gap:16px">${statusLegend()}</div>
     </div>
