@@ -275,6 +275,8 @@ const DASHES = {
     // Distribuições extras sobre todas as leads
     extrasLeads:[["pagina","Página"],["noGrupo","Está no grupo"]],
     whatsapp:false,        // só campanhas de captação: sem filtro/blocos de WhatsApp
+    canais:true,           // separa leads de TRÁFEGO e ORGÂNICAS pelo "canal=" da Origem completa.
+                           // Métricas de mídia (CPL, Tx conv. pg, campanhas, anúncios) usam só tráfego.
     resumoBlocos:["tot","ontem","hoje"], // Resumo diário: Total, Ontem e Hoje
     edicao:"lancamento",
     // Planejamento em faixas (R$/dia por período, datas inclusivas).
@@ -504,6 +506,11 @@ function parseCadastro(s){
 }
 function simNao(v){ v=String(v||"").trim().toLowerCase(); return v==="sim"?true:(v==="não"||v==="nao")?false:null; }
 function utmParam(url,key){ const m=String(url||"").match(new RegExp("(?:^|[?&])"+key+"=([^&]*)")); return m?decodeURIComponent(m[1].replace(/\+/g," ")):""; }
+// "canal=" da Origem completa → "trafego" | "organico". Sem canal, conta como tráfego.
+function canalDe(v){ v=String(v||"").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,""); return v.startsWith("organ")?"organico":"trafego"; }
+function temCanais(){ return CONFIG.canais===true&&S.hasLeadsBase; }
+const CANAL_OPTS=[["trafego","Tráfego"],["organico","Orgânico"],["todos","Todos"]];
+const CANAL_LABEL={trafego:"Tráfego",organico:"Orgânico",todos:"Todos"};
 function utmId(v){ const m=String(v||"").match(/_id_(\d+)\s*$/); return m?m[1]:""; }
 // Chave de ligação lead ↔ mídia: SEMPRE o ID (campanha/anúncio). Sem ID na UTM,
 // cai pro nome; sem UTM nenhuma, vira "Sem UTM".
@@ -554,7 +561,8 @@ function parseLeads(table){
       campName:campName||SEM_UTM,adsetName:g("conjunto"),adName:g("anuncio")||SEM_UTM,placement:g("posic"),
       // IDs vêm do sufixo "_id_<número>" da UTM: utm_medium = campanha, utm_term = conjunto, utm_content = anúncio
       campId:utmId(utmParam(origem,"utm_medium")),adsetId:utmId(utmParam(origem,"utm_term")),adId:utmId(utmParam(origem,"utm_content")),
-      utmSource:utmParam(origem,"utm_source"),hasUtm:!!campName,resp,extra,formatoAntigo:false});
+      utmSource:utmParam(origem,"utm_source"),hasUtm:!!campName,resp,extra,formatoAntigo:false,
+      canal:canalDe(utmParam(origem,"canal"))});
   }
   // Dedup por telefone (últimos 11 dígitos): vale o 1º cadastro da pessoa.
   all.sort((a,b)=>a.ms-b.ms);
@@ -701,7 +709,9 @@ function sumRows(rows){
 function filterLeads(f={}){
   if(f.tipo==="whatsapp")return [];
   const tmap={quente:"Quente",morno:"Morno",frio:"Frio"};
+  const canal=CONFIG.canais===true?(f.canal||"trafego"):"todos";
   return S.leads.filter(l=>
+    (canal==="todos"||l.canal===canal)&&
     (f.start==null||l.date>=f.start)&&(f.end==null||l.date<=f.end)&&
     (!f.temp||f.temp==="todos"||l.temp===tmap[f.temp])&&
     (!f.camps||f.camps.size===0||f.camps.has(l.campKey))&&
@@ -759,11 +769,18 @@ function tempPctsGer(rows){
   return{quentePct:by.Quente/tot*100,mornoPct:by.Morno/tot*100,frioPct:by.Frio/tot*100};
 }
 // Pacote completo de um período: total, captação e WhatsApp separados.
-function periodPack(start,end,temp="todos"){
+function periodPack(start,end,temp="todos",canal="trafego"){
   const all=filterRows({start,end,temp});
   const cap=all.filter(r=>r.tipo==="captacao"), wa=all.filter(r=>r.tipo==="whatsapp");
-  const ls=filterLeads({start,end,temp});
-  return{ total:packOf(all,ls), cap:packOf(cap,ls), wa:{...derive({...sumRows(wa),leads:0}),leads:0} };
+  const ls=filterLeads({start,end,temp,canal});
+  const out={ total:packOf(all,ls), cap:packOf(cap,ls), wa:{...derive({...sumRows(wa),leads:0}),leads:0} };
+  if(CONFIG.canais===true&&canal!=="trafego")for(const k of ["total","cap"]){ out[k].cpl=null; out[k].txConvPg=null; }
+  return out;
+}
+// Contagem de leads por canal num período (Black).
+function leadsPorCanal(start,end,temp="todos"){
+  const n=c=>filterLeads({start,end,temp,canal:c}).length;
+  return{trafego:n("trafego"),organico:n("organico"),todos:n("todos")};
 }
 function periodDates(start,end){ return S.dates.filter(d=>d>=start&&d<=end); }
 
@@ -1096,9 +1113,10 @@ function foot(txt){ return `<div class="foot">${CONFIG.nome} · ${txt} · Google
 
 // ── Render: Principal ─────────────────────────────────────────────────────
 function setPrincipalTemp(t){ S.principalTemp=t; renderPrincipal(); }
+function setPrincipalCanal(c){ S.principalCanal=c; renderPrincipal(); }
 function dailySeries(start,end,f={}){
   return periodDates(start,end).map(date=>{
-    const p=periodPack(date,date,f.temp||"todos");
+    const p=periodPack(date,date,f.temp||"todos",f.canal||"trafego");
     return{date,label:fDate(date),tipLabel:`${diaSemana(date)}, ${fDate(date)}`,
       spend:p.cap.spend,leads:p.cap.leads,leadsGer:p.cap.leadsGer,cpl:p.cap.cpl,
       faixaA:p.cap.faixaA??null,faixaB:p.cap.faixaB??null,faixaC:p.cap.faixaC??null,faixaD:p.cap.faixaD??null,quizPct:p.cap.quizPct??null,
@@ -1144,19 +1162,21 @@ function drawBarWithGap(id,data,cssW,cssH,showGap){
 function renderPrincipal(){
   const el=document.getElementById("page-principal");if(!el)return;
   const temp=S.principalTemp;
-  const p=periodPack(S.startDate,S.endDate,temp);
+  const canal=temCanais()?(S.principalCanal||"trafego"):"trafego";
+  const p=periodPack(S.startDate,S.endDate,temp,canal);
+  const pc=temCanais()?leadsPorCanal(S.startDate,S.endDate,temp):null;
   const c=p.cap;
-  const daily=dailySeries(S.startDate,S.endDate,{temp}).map(d=>({...d,
+  const daily=dailySeries(S.startDate,S.endDate,{temp,canal}).map(d=>({...d,
     gapPct:S.hasLeadsBase&&d.leads>0?((d.leadsGer-d.leads)/d.leads)*100:null}));
   const fimPlano=S.endDate<todayISO()?S.endDate:todayISO();
   const planPer=planRange(S.startDate>CONFIG.planoInicio?S.startDate:CONFIG.planoInicio,fimPlano);
   const tempLabel=Object.fromEntries(TEMP_OPTS)[temp];
   const tmap={quente:"Quente",morno:"Morno",frio:"Frio"};
-  const leadsSemDedup=S.hasLeadsBase?S.leadsAll.filter(l=>l.date>=S.startDate&&l.date<=S.endDate&&(temp==="todos"||l.temp===tmap[temp])).length:null;
-  const nClass=S.hasLeadsBase?filterLeads({start:S.startDate,end:S.endDate,temp}).filter(l=>l.temp).length:null;
+  const leadsSemDedup=S.hasLeadsBase?S.leadsAll.filter(l=>l.date>=S.startDate&&l.date<=S.endDate&&(temp==="todos"||l.temp===tmap[temp])&&(!temCanais()||canal==="todos"||l.canal===canal)).length:null;
+  const nClass=S.hasLeadsBase?filterLeads({start:S.startDate,end:S.endDate,temp,canal}).filter(l=>l.temp).length:null;
   const nTemp=pctv=>pctv==null||nClass==null?"":`${fInt(Math.round(pctv*nClass/100))} de ${fInt(nClass)} classificadas`;
   const investColor=planPer>0?statusColor(p.total.spend,planPer,false):"var(--text-strong)";
-  const subFx=L=>temPesq()?[M("faixa"+L)!=null?`meta ${M("faixa"+L)}%`:"",`${fInt(filterLeads({start:S.startDate,end:S.endDate,temp}).filter(l=>l.faixa===L).length)} leads`].filter(Boolean).join(" · "):"";
+  const subFx=L=>temPesq()?[M("faixa"+L)!=null?`meta ${M("faixa"+L)}%`:"",`${fInt(filterLeads({start:S.startDate,end:S.endDate,temp,canal}).filter(l=>l.faixa===L).length)} leads`].filter(Boolean).join(" · "):"";
   const kpiPct=(lbl,v,k,sub)=>kpiCard(lbl,fPctOrDash(v),[sub,M(k)!=null?`meta ${M(k)}%`:""].filter(Boolean).join(" · "),M(k)!=null&&v!=null?metaColor(k,v):"var(--text-strong)",false,v,M(k),MH(k));
   const waVis=temWhats()&&(temp==="todos"||temp==="quente"||p.wa.spend>0);
 
@@ -1167,14 +1187,14 @@ function renderPrincipal(){
         <div class="hdr-sub">${periodSub()} · atualizado em: ${S.updated||"—"} · temperatura: ${tempLabel}</div>
       </div>
     </div>
-    <div class="filters">${toggleGroup("Temperatura",TEMP_OPTS,temp,"setPrincipalTemp")}</div>
+    <div class="filters">${temCanais()?toggleGroup("Canal",CANAL_OPTS,canal,"setPrincipalCanal"):""}${toggleGroup("Temperatura",TEMP_OPTS,temp,"setPrincipalTemp")}</div>
     ${S.error?`<div class="err">⚠️ ${S.error}</div>`:""}
     ${leadsNotice()}
 
     <div class="g3" style="margin-bottom:13px">
       ${kpiCard("Investimento",fBRL(p.total.spend),`planejado até hoje: ${fBRL(planPer)}${temWhats()?` · captação ${fBRL(c.spend)} · WhatsApp ${fBRL(p.wa.spend)}`:""}`,investColor,false,p.total.spend,planPer||null,false)}
-      ${kpiCard("Leads captados",temLeads()?fInt(c.leads):"—",S.hasLeadsBase?[`${fInt(c.semUtm)} sem UTM`,`${fInt(leadsSemDedup)} leads totais (sem dedup)`,`gerenciador: ${fInt(c.leadsGer)}`].join(" · "):"gerenciador (pixel)")}
-      ${kpiCard("Custo/lead",fBRLOrDash(c.cpl),[M("cpl")!=null?`meta ${fBRL(M("cpl"))}`:"","investimento de captação ÷ leads"].filter(Boolean).join(" · "),M("cpl")!=null&&c.cpl!=null?metaColor("cpl",c.cpl):"var(--text-strong)",false,c.cpl,M("cpl"),false)}
+      ${kpiCard(temCanais()?`Leads captados${canal==="todos"?"":" · "+CANAL_LABEL[canal].toLowerCase()}`:"Leads captados",temLeads()?fInt(c.leads):"—",temCanais()?[`tráfego ${fInt(pc.trafego)}`,`orgânico ${fInt(pc.organico)}`,`total ${fInt(pc.todos)}`,`gerenciador: ${fInt(c.leadsGer)}`].join(" · "):S.hasLeadsBase?[`${fInt(c.semUtm)} sem UTM`,`${fInt(leadsSemDedup)} leads totais (sem dedup)`,`gerenciador: ${fInt(c.leadsGer)}`].join(" · "):"gerenciador (pixel)")}
+      ${kpiCard("Custo/lead",fBRLOrDash(c.cpl),[M("cpl")!=null?`meta ${fBRL(M("cpl"))}`:"",temCanais()?(canal==="trafego"?"investimento ÷ leads do tráfego":"só no canal Tráfego"):"investimento de captação ÷ leads"].filter(Boolean).join(" · "),M("cpl")!=null&&c.cpl!=null?metaColor("cpl",c.cpl):"var(--text-strong)",false,c.cpl,M("cpl"),false)}
     </div>
     ${temPesq()?`
     <div class="g4" style="margin-bottom:13px">
@@ -1541,6 +1561,7 @@ function renderMetricasTrafego(){
 
 // ── Render: Análise qualificação ──────────────────────────────────────────
 function setLeadsTemp(t){ S.leadsTemp=t; renderLeads(); }
+function setLeadsCanal(c){ S.leadsCanal=c; renderLeads(); }
 function setLeadsSearch(v){ S.leadsSearch=v; preservaFoco(()=>renderLeads()); }
 function sortLeadsTab(col){ if(S.leadsSort.col===col)S.leadsSort.dir=S.leadsSort.dir==="asc"?"desc":"asc";else{S.leadsSort.col=col;S.leadsSort.dir="desc";} renderLeads(); }
 function distBlock(title,ls,keyFn,colorFn,note){
@@ -1571,7 +1592,8 @@ function renderLeads(){
     return;
   }
   const temp=S.leadsTemp;
-  const ls=filterLeads({start:S.startDate,end:S.endDate,temp});
+  const canal=temCanais()?(S.leadsCanal||"todos"):"trafego";
+  const ls=filterLeads({start:S.startDate,end:S.endDate,temp,canal});
   const q=qualityOf(ls);
   const comPesq=ls.filter(l=>l.quiz!==null);
   const faixaColor=k=>CHART_FAIXA[k]||"#60a5fa";
@@ -1595,7 +1617,7 @@ function renderLeads(){
         <div class="hdr-sub">${periodSub()} · Base leads · ${fInt(S.leadsInfo.linhas)} linhas lidas${S.leadsInfo.duplicadas?` · ${fInt(S.leadsInfo.duplicadas)} duplicadas removidas`:""}</div>
       </div>
     </div>
-    <div class="filters">${toggleGroup("Temperatura",TEMP_OPTS,temp,"setLeadsTemp")}</div>
+    <div class="filters">${temCanais()?toggleGroup("Canal",CANAL_OPTS,canal,"setLeadsCanal"):""}${toggleGroup("Temperatura",TEMP_OPTS,temp,"setLeadsTemp")}</div>
     ${S.error?`<div class="err">⚠️ ${S.error}</div>`:""}
     <div class="g6" style="margin-bottom:8px">
       ${kpiCard("Leads",fInt(q.nLeads),`${fInt(q.semUtm)} sem UTM`,CHART_LEAD)}
@@ -1611,11 +1633,12 @@ function renderLeads(){
 
     <div class="section-lbl">Respostas da pesquisa — % sobre quem respondeu cada pergunta</div>
     <div class="g3" style="margin-bottom:16px">
+      ${temCanais()&&canal==="todos"?distBlock("Canal",ls,l=>CANAL_LABEL[l.canal]||"",(k)=>k==="Orgânico"?"#a78bfa":"#60a5fa"):""}
       ${distBlock("Faixa",ls,l=>l.faixa,faixaColor)}
       ${perguntas().map(([k,t])=>distBlock(t,comPesq,l=>l.resp[k],palFn)).join("")}
       ${distBlock("Clicou no grupo",ls,l=>l.grupo===true?"sim":l.grupo===false?"não":"",(k)=>k==="sim"?"#34d399":"#f87171")}
       ${(CONFIG.extrasLeads||[]).map(([k,t])=>distBlock(t,ls,l=>(l.extra&&l.extra[k])||"",(v,i)=>v==="sim"?"#34d399":v==="não"?"#f87171":palFn(v,i))).join("")}
-      ${distBlock("Posicionamento",ls.filter(l=>l.hasUtm),l=>l.placement,palFn)}
+      ${distBlock("Posicionamento",ls.filter(l=>l.hasUtm&&(!temCanais()||l.canal==="trafego")),l=>l.placement,palFn)}
     </div>
 
     ${foot("Análise qualificação")}`;
@@ -1710,6 +1733,9 @@ function renderResumo(){
     {key:"ontem",title:"⬅️ Ontem",txt:"*⬅️ Ontem*",dateLbl:fDateBR(yest),p:periodPack(yest,yest),plan:planForDate(yest)},
     {key:"hoje",title:"⬇️ Hoje",txt:"*⬇️ Hoje*",dateLbl:fDateBR(today),p:periodPack(today,today),plan:planForDate(today)},
   ].filter(b=>resumoBlocos().includes(b.key));
+  // Leads orgânicas de cada bloco (só quando a dash separa canais)
+  const rng={tot:[S.startDate,S.endDate],edicao:[edIni,today],ontem:[yest,yest],hoje:[today,today]};
+  for(const b of blocks){ const [a,z]=rng[b.key]; b.org=temCanais()?filterLeads({start:a,end:z,canal:"organico"}).length:0; }
   const fmtRow=(v,k,fmt)=>`${v==null?"—":fmt(v)}${M(k)!=null?`\t${metaEmoji(k,v)} (🎯 ${fmt(M(k))})`:""}`;
   // Modelo só captação (sem WhatsApp e sem o subtítulo "Página de captura")
   function textBlockCap(b){
@@ -1719,7 +1745,8 @@ function renderResumo(){
 Investimento total:\t${fBRL(p.total.spend)}\t(plan.: ${fBRL(plan)})
 
 Investimento:\t${fBRL(p.cap.spend)}
-Leads:\t${temLeads()?fInt(p.cap.leads):"—"}
+Leads:\t${temLeads()?fInt(p.cap.leads):"—"}${temCanais()?`
+Leads orgânicas:\t${fInt(b.org)}`:""}
 Custo por lead:\t${fmtRow(p.cap.cpl,"cpl",fBRL)}
 
 Tx quente:\t${fmtRow(p.cap.quentePct,"quente",fPct)}
@@ -1748,7 +1775,8 @@ Investimento total:\t${fBRL(p.total.spend)}\t(plan.: ${fBRL(plan)})
 
 📥 Página de captura
 Investimento:\t${fBRL(p.cap.spend)}
-Leads:\t${temLeads()?fInt(p.cap.leads):"—"}
+Leads:\t${temLeads()?fInt(p.cap.leads):"—"}${temCanais()?`
+Leads orgânicas:\t${fInt(b.org)}`:""}
 Custo por lead:\t${fmtRow(p.cap.cpl,"cpl",fBRL)}
 
 Tx quente:\t${fmtRow(p.cap.quentePct,"quente",fPct)}
@@ -1800,7 +1828,8 @@ CPC:\t${fmtRow(p.wa.cpc,"cpcWhats",fBRL)}`;
       </div>
       ${temWhats()?sub("📥 Página de captura"):""}
       ${row("Investimento",fBRL(p.cap.spend))}
-      ${row("Leads",temLeads()?fInt(p.cap.leads):"—")}
+      ${row(temCanais()?"Leads (tráfego)":"Leads",temLeads()?fInt(p.cap.leads):"—")}
+      ${temCanais()?row("Leads orgânicas",fInt(b.org)):""}
       ${row("Custo por lead",fBRLOrDash(p.cap.cpl),"cpl",p.cap.cpl)}
       <div style="height:8px"></div>
       ${row("Tx quente",fPctOrDash(p.cap.quentePct),"quente",p.cap.quentePct)}
