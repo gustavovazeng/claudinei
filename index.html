@@ -1745,10 +1745,12 @@ function renderResumo(){
 Investimento total:\t${fBRL(p.total.spend)}\t(plan.: ${fBRL(plan)})
 
 Investimento:\t${fBRL(p.cap.spend)}
-Leads:\t${temLeads()?fInt(p.cap.leads):"—"}${temCanais()?`
-Leads orgânicas:\t${fInt(b.org)}`:""}
+Leads:\t${temLeads()?fInt(p.cap.leads):"—"}
 Custo por lead:\t${fmtRow(p.cap.cpl,"cpl",fBRL)}
-
+${temCanais()?`
+Leads orgânica:\t${fInt(b.org)}
+Leads totais:\t${fInt((temLeads()?p.cap.leads:0)+b.org)}
+`:""}
 Tx quente:\t${fmtRow(p.cap.quentePct,"quente",fPct)}
 Tx frio:\t${fmtRow(p.cap.frioPct,"frio",fPct)}
 ${temPesq()?`
@@ -1775,10 +1777,12 @@ Investimento total:\t${fBRL(p.total.spend)}\t(plan.: ${fBRL(plan)})
 
 📥 Página de captura
 Investimento:\t${fBRL(p.cap.spend)}
-Leads:\t${temLeads()?fInt(p.cap.leads):"—"}${temCanais()?`
-Leads orgânicas:\t${fInt(b.org)}`:""}
+Leads:\t${temLeads()?fInt(p.cap.leads):"—"}
 Custo por lead:\t${fmtRow(p.cap.cpl,"cpl",fBRL)}
-
+${temCanais()?`
+Leads orgânica:\t${fInt(b.org)}
+Leads totais:\t${fInt((temLeads()?p.cap.leads:0)+b.org)}
+`:""}
 Tx quente:\t${fmtRow(p.cap.quentePct,"quente",fPct)}
 Tx frio:\t${fmtRow(p.cap.frioPct,"frio",fPct)}
 ${temPesq()?`
@@ -1829,8 +1833,8 @@ CPC:\t${fmtRow(p.wa.cpc,"cpcWhats",fBRL)}`;
       ${temWhats()?sub("📥 Página de captura"):""}
       ${row("Investimento",fBRL(p.cap.spend))}
       ${row(temCanais()?"Leads (tráfego)":"Leads",temLeads()?fInt(p.cap.leads):"—")}
-      ${temCanais()?row("Leads orgânicas",fInt(b.org)):""}
       ${row("Custo por lead",fBRLOrDash(p.cap.cpl),"cpl",p.cap.cpl)}
+      ${temCanais()?`<div style="height:8px"></div>${row("Leads orgânica",fInt(b.org))}${row("Leads totais",fInt((temLeads()?p.cap.leads:0)+b.org))}`:""}
       <div style="height:8px"></div>
       ${row("Tx quente",fPctOrDash(p.cap.quentePct),"quente",p.cap.quentePct)}
       ${row("Tx frio",fPctOrDash(p.cap.frioPct),"frio",p.cap.frioPct)}
