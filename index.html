@@ -293,7 +293,11 @@ const DASHES = {
     planoDiario:0,
     planoInicio:"2026-11-03",
     planoFim:"2026-11-24",
-    metas:METAS_VAZIAS(),
+    metas:{...METAS_VAZIAS(),
+      cpl:      {val:10.6,higher:false}, // R$ por lead — total do tráfego
+      cplAlunos:{val:30,  higher:false}, // R$ por lead — campanhas QUENTE (alunos)
+      cplNao:   {val:7.5, higher:false}, // R$ por lead — campanhas FRIO (não alunos)
+    },
   },
 };
 const DASH_ORDEM = ["quinta","black"];
@@ -1768,11 +1772,11 @@ Custo por lead:\t${fmtRow(p.cap.cpl,"cpl",fBRL)}
 ${b.seg?`
 Investimento alunos:\t${fBRL(b.seg.alunos.spend)}
 Leads alunos:\t${fInt(b.seg.alunos.leads)}
-Custo por lead alunos:\t${fBRLOrDash(b.seg.alunos.cpl)}
+Custo por lead alunos:\t${fmtRow(b.seg.alunos.cpl,"cplAlunos",fBRL)}
 
 Investimento não alunos:\t${fBRL(b.seg.nao.spend)}
 Leads não alunos:\t${fInt(b.seg.nao.leads)}
-Custo por lead não alunos:\t${fBRLOrDash(b.seg.nao.cpl)}
+Custo por lead não alunos:\t${fmtRow(b.seg.nao.cpl,"cplNao",fBRL)}
 `:""}${temCanais()?`
 Leads orgânica:\t${fInt(b.org)}
 Leads totais:\t${fInt((temLeads()?p.cap.leads:0)+b.org)}
@@ -1809,11 +1813,11 @@ Custo por lead:\t${fmtRow(p.cap.cpl,"cpl",fBRL)}
 ${b.seg?`
 Investimento alunos:\t${fBRL(b.seg.alunos.spend)}
 Leads alunos:\t${fInt(b.seg.alunos.leads)}
-Custo por lead alunos:\t${fBRLOrDash(b.seg.alunos.cpl)}
+Custo por lead alunos:\t${fmtRow(b.seg.alunos.cpl,"cplAlunos",fBRL)}
 
 Investimento não alunos:\t${fBRL(b.seg.nao.spend)}
 Leads não alunos:\t${fInt(b.seg.nao.leads)}
-Custo por lead não alunos:\t${fBRLOrDash(b.seg.nao.cpl)}
+Custo por lead não alunos:\t${fmtRow(b.seg.nao.cpl,"cplNao",fBRL)}
 `:""}${temCanais()?`
 Leads orgânica:\t${fInt(b.org)}
 Leads totais:\t${fInt((temLeads()?p.cap.leads:0)+b.org)}
@@ -1870,7 +1874,7 @@ CPC:\t${fmtRow(p.wa.cpc,"cpcWhats",fBRL)}`;
       ${row("Investimento",fBRL(p.cap.spend))}
       ${row(temCanais()?"Leads (tráfego)":"Leads",temLeads()?fInt(p.cap.leads):"—")}
       ${row("Custo por lead",fBRLOrDash(p.cap.cpl),"cpl",p.cap.cpl)}
-      ${b.seg?`<div style="height:8px"></div>${row("Investimento alunos",fBRL(b.seg.alunos.spend))}${row("Leads alunos",fInt(b.seg.alunos.leads))}${row("Custo por lead alunos",fBRLOrDash(b.seg.alunos.cpl))}<div style="height:8px"></div>${row("Investimento não alunos",fBRL(b.seg.nao.spend))}${row("Leads não alunos",fInt(b.seg.nao.leads))}${row("Custo por lead não alunos",fBRLOrDash(b.seg.nao.cpl))}`:""}
+      ${b.seg?`<div style="height:8px"></div>${row("Investimento alunos",fBRL(b.seg.alunos.spend))}${row("Leads alunos",fInt(b.seg.alunos.leads))}${row("Custo por lead alunos",fBRLOrDash(b.seg.alunos.cpl),"cplAlunos",b.seg.alunos.cpl)}<div style="height:8px"></div>${row("Investimento não alunos",fBRL(b.seg.nao.spend))}${row("Leads não alunos",fInt(b.seg.nao.leads))}${row("Custo por lead não alunos",fBRLOrDash(b.seg.nao.cpl),"cplNao",b.seg.nao.cpl)}`:""}
       ${temCanais()?`<div style="height:8px"></div>${row("Leads orgânica",fInt(b.org))}${row("Leads totais",fInt((temLeads()?p.cap.leads:0)+b.org))}`:""}
       <div style="height:8px"></div>
       ${b.seg?`${row("Tx alunos",fPctOrDash(b.seg.txAlunos))}${row("Tx não alunos",fPctOrDash(b.seg.txNao))}`:`${row("Tx quente",fPctOrDash(p.cap.quentePct),"quente",p.cap.quentePct)}
