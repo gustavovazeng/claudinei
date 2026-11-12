@@ -510,7 +510,14 @@ function parseCadastro(s){
   return isNaN(ms)?null:{ms,date:msToISO(ms)};
 }
 function simNao(v){ v=String(v||"").trim().toLowerCase(); return v==="sim"?true:(v==="não"||v==="nao")?false:null; }
-function utmParam(url,key){ const m=String(url||"").match(new RegExp("(?:^|[?&])"+key+"=([^&]*)")); return m?decodeURIComponent(m[1].replace(/\+/g," ")):""; }
+// Decodifica %XX sem quebrar: se a origem vier cortada/mal formada (ex.: "%5" no fim),
+// decodifica só as sequências válidas e mantém o resto como está.
+function safeDecode(v){
+  v=String(v||"").replace(/\+/g," ");
+  try{ return decodeURIComponent(v); }
+  catch(_){ return v.replace(/(%[0-9A-Fa-f]{2})+/g,seq=>{ try{ return decodeURIComponent(seq); }catch(_){ return seq; } }); }
+}
+function utmParam(url,key){ const m=String(url||"").match(new RegExp("(?:^|[?&])"+key+"=([^&]*)")); return m?safeDecode(m[1]):""; }
 // "canal=" da Origem completa → "trafego" | "organico". Sem canal, conta como tráfego.
 function canalDe(v){ v=String(v||"").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,""); return v.startsWith("organ")?"organico":"trafego"; }
 // Público pela temperatura da campanha: QUENTE = alunos, FRIO = não alunos.
@@ -582,7 +589,7 @@ function parseLeads(table){
       temp:pub==="quente"?"Quente":pub==="morno"?"Morno":pub==="frio"?"Frio":campaignTemperature(campName),
       campName:campName||SEM_UTM,adsetName:g("conjunto"),adName:g("anuncio")||SEM_UTM,placement:g("posic"),
       // IDs vêm do sufixo "_id_<número>" da UTM: utm_medium = campanha, utm_term = conjunto, utm_content = anúncio
-      campId:utmId(utmParam(origem,"utm_medium")),adsetId:utmId(utmParam(origem,"utm_term")),adId:utmId(utmParam(origem,"utm_content")),
+      campId:utmId(utmParam(origem,"utm_medium")),adsetId:utmId(utmParam(origem,"utm_term")),adId:utmId(utmParam(origem,"utm_content"))||utmParam(origem,"vk_ad_id"), // origem cortada perde o "_id_" do fim: usa o vk_ad_id
       utmSource:utmParam(origem,"utm_source"),hasUtm:!!campName,resp,extra,formatoAntigo:false,
       canal:canalDe(utmParam(origem,"canal"))});
   }
