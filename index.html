@@ -280,14 +280,21 @@ const DASHES = {
                            // Métricas de mídia (CPL, Tx conv. pg, campanhas, anúncios) usam só tráfego.
     resumoBlocos:["tot","ontem","hoje"], // Resumo diário: Total, Ontem e Hoje
     edicao:"lancamento",
-    // Planejamento em faixas (R$/dia por período, datas inclusivas).
-    // A verba nova de R$ 920 começa no dia 10. Total do plano: R$ 15.500 —
-    // a diferença (R$ 295) sai do dia 24, que fica com R$ 625.
-    planoFaixas:[
-      {inicio:"2026-11-03",fim:"2026-11-09",diario:285},
-      {inicio:"2026-11-10",fim:"2026-11-23",diario:920},
-      {inicio:"2026-11-24",fim:"2026-11-24",diario:625},
-    ],
+    // Planejamento (replanejado em 16/11). Total R$ 15.500:
+    //  • 03→15/11: planejado = realizado (R$ 5.909,33).
+    //  • 16→24/11: captação = o que sobra, dividido igual (R$ 1.013,96/dia; o 24 fecha o centavo).
+    //  • Lembrete = 3% do total (R$ 465), 17→23/11, rampa 5-5-6-6-7-7-8 (mesma proporção do modelo).
+    planoDias:{ // captação, R$ por dia
+      "2026-11-03":111.05,"2026-11-04":224.18,"2026-11-05":332.93,"2026-11-06":246.96,"2026-11-07":230.79,
+      "2026-11-08":248.23,"2026-11-09":166.59,"2026-11-10":164.99,"2026-11-11":440.91,"2026-11-12":1127.85,
+      "2026-11-13":1057.47,"2026-11-14":646.60,"2026-11-15":910.78,
+      "2026-11-16":1013.96,"2026-11-17":1013.96,"2026-11-18":1013.96,"2026-11-19":1013.96,"2026-11-20":1013.96,
+      "2026-11-21":1013.96,"2026-11-22":1013.96,"2026-11-23":1013.96,"2026-11-24":1013.99,
+    },
+    planoLembrete:{ // campanhas com [LEMB] no nome, R$ por dia
+      "2026-11-17":52.84,"2026-11-18":52.84,"2026-11-19":63.41,"2026-11-20":63.41,
+      "2026-11-21":73.98,"2026-11-22":73.98,"2026-11-23":84.54,
+    },
     // planoDiario/planoInicio/planoFim abaixo ficam derivados das faixas.
     // início e fim) que a aba Planejado/Realizado liga sozinha.
     planoDiario:0,
@@ -467,6 +474,7 @@ function parseCSVText(text){
 // ── Classificação pelo nome da campanha ───────────────────────────────────
 function campaignTipo(campName){
   const c=String(campName||"").toLowerCase();
+  if(c.includes("[lemb]"))return "lembrete";
   return c.includes("whatsapp")?"whatsapp":"captacao";
 }
 function campaignTemperature(campName){
@@ -476,8 +484,8 @@ function campaignTemperature(campName){
   if(c.includes("frio"))return "Frio";
   return "";
 }
-const TIPO_LABEL={captacao:"Captação",whatsapp:"WhatsApp"};
-function tipoTag(t){ return `<span class="tag ${t==="whatsapp"?"tag-wa":"tag-cap"}">${TIPO_LABEL[t]}</span>`; }
+const TIPO_LABEL={captacao:"Captação",whatsapp:"WhatsApp",lembrete:"Lembrete"};
+function tipoTag(t){ return `<span class="tag ${t==="whatsapp"?"tag-wa":t==="lembrete"?"tag-m":"tag-cap"}">${TIPO_LABEL[t]||t}</span>`; }
 function tempTag(t){ if(!t)return `<span style="color:var(--hint)">—</span>`; return `<span class="tag ${t==="Quente"?"tag-q":t==="Morno"?"tag-m":"tag-f"}">${t}</span>`; }
 
 // ── Base leads ────────────────────────────────────────────────────────────
@@ -522,6 +530,7 @@ function utmParam(url,key){ const m=String(url||"").match(new RegExp("(?:^|[?&])
 function canalDe(v){ v=String(v||"").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,""); return v.startsWith("organ")?"organico":"trafego"; }
 // Público pela temperatura da campanha: QUENTE = alunos, FRIO = não alunos.
 function segPublico(t){ return t==="Quente"?"alunos":t==="Frio"?"nao":""; }
+function temLembrete(){ return !!CONFIG.planoLembrete; }
 function temSegAlunos(){ return CONFIG.segAlunos===true; }
 // Investimento/leads (tráfego)/CPL por público num período + Tx alunos/não alunos (sobre as leads de tráfego classificadas).
 function segPack(start,end){
@@ -814,14 +823,20 @@ function leadsPorCanal(start,end,temp="todos"){
 function periodDates(start,end){ return S.dates.filter(d=>d>=start&&d<=end); }
 
 // ── Planejamento ──────────────────────────────────────────────────────────
-function planForDate(d){
+// Plano do dia. tipo: undefined = total · "captacao" · "lembrete".
+function planForDate(d,tipo){
+  if(CONFIG.planoDias){
+    const cap=CONFIG.planoDias[d]||0, lem=(CONFIG.planoLembrete&&CONFIG.planoLembrete[d])||0;
+    return tipo==="captacao"?cap:tipo==="lembrete"?lem:cap+lem;
+  }
+  if(tipo==="lembrete")return 0;
   if(CONFIG.planoFaixas){ const f=CONFIG.planoFaixas.find(x=>d>=x.inicio&&d<=x.fim); return f?f.diario:0; }
   if(!CONFIG.planoDiario||d<CONFIG.planoInicio)return 0;
   if(CONFIG.planoFim&&d>CONFIG.planoFim)return 0;
   return CONFIG.planoDiario;
 }
-function planRange(start,end){
-  return daysBetween(start||CONFIG.planoInicio,end).reduce((a,d)=>a+planForDate(d),0);
+function planRange(start,end,tipo){
+  return daysBetween(start||CONFIG.planoInicio,end).reduce((a,d)=>a+planForDate(d,tipo),0);
 }
 function planoAteHoje(){
   const fim=CONFIG.planoFim&&CONFIG.planoFim<todayISO()?CONFIG.planoFim:todayISO();
@@ -1221,7 +1236,7 @@ function renderPrincipal(){
     ${leadsNotice()}
 
     <div class="g3" style="margin-bottom:13px">
-      ${kpiCard("Investimento",fBRL(p.total.spend),`planejado até hoje: ${fBRL(planPer)}${temWhats()?` · captação ${fBRL(c.spend)} · WhatsApp ${fBRL(p.wa.spend)}`:""}`,investColor,false,p.total.spend,planPer||null,false)}
+      ${kpiCard("Investimento",fBRL(p.total.spend),`planejado até hoje: ${fBRL(planPer)}${temWhats()?` · captação ${fBRL(c.spend)} · WhatsApp ${fBRL(p.wa.spend)}`:temLembrete()?` · captação ${fBRL(c.spend)} · lembrete ${fBRL(p.total.spend-c.spend)}`:""}`,investColor,false,p.total.spend,planPer||null,false)}
       ${kpiCard(temCanais()?`Leads captados${canal==="todos"?"":" · "+CANAL_LABEL[canal].toLowerCase()}`:"Leads captados",temLeads()?fInt(c.leads):"—",temCanais()?[`tráfego ${fInt(pc.trafego)}`,`orgânico ${fInt(pc.organico)}`,`total ${fInt(pc.todos)}`,`gerenciador: ${fInt(c.leadsGer)}`].join(" · "):S.hasLeadsBase?[`${fInt(c.semUtm)} sem UTM`,`${fInt(leadsSemDedup)} leads totais (sem dedup)`,`gerenciador: ${fInt(c.leadsGer)}`].join(" · "):"gerenciador (pixel)")}
       ${kpiCard("Custo/lead",fBRLOrDash(c.cpl),[M("cpl")!=null?`meta ${fBRL(M("cpl"))}`:"",temCanais()?(canal==="trafego"?"investimento ÷ leads do tráfego":"só no canal Tráfego"):"investimento de captação ÷ leads"].filter(Boolean).join(" · "),M("cpl")!=null&&c.cpl!=null?metaColor("cpl",c.cpl):"var(--text-strong)",false,c.cpl,M("cpl"),false)}
     </div>
@@ -1472,7 +1487,7 @@ function renderAnuncios(){
         <thead><tr><th style="width:36px"></th><th onclick="sortCampanhas('campName')">Campanha</th>${metricCols(true)}</tr></thead>
         <tbody>
           ${camps.length===0?`<tr><td colspan="20" style="text-align:center;color:var(--hint);padding:20px">Sem dados de campanhas no período</td></tr>`:
-          camps.map(c=>{const sel=S.selectedCamps.has(c.campKey);const isWa=c.tipo==="whatsapp";
+          camps.map(c=>{const sel=S.selectedCamps.has(c.campKey);const isWa=c.tipo!=="captacao";
             if(c.semUtmRow)return `<tr style="background:rgba(148,163,184,.04)">
               <td></td><td style="color:var(--muted)">${SEM_UTM} <span style="font-size:10px;color:var(--hint)">(leads sem campanha${CONFIG.id==="quinta"?" — ex.: cadastros de 07→11/10":""})</span></td>
               ${td("—")}${td(fInt(c.leads))}${td("—")}${td("—")}${td("—")}${td("—")}${td("—")}${td("—")}${qualTds(c,false)}</tr>`;
@@ -1676,7 +1691,7 @@ function renderLeads(){
 // ── Render: Planejado × Realizado ─────────────────────────────────────────
 // Leads planejados/dia = investimento planejado ÷ meta de CPL (igual ao modelo).
 // Sem meta de CPL (CONFIG.metas.cpl) não há plano de leads → "—".
-function planLeadsForDate(d){ const inv=planForDate(d), cpl=M("cpl"); return inv&&cpl?Math.round(inv/cpl):null; }
+function planLeadsForDate(d){ const inv=planForDate(d,"captacao"), cpl=M("cpl"); return inv&&cpl?Math.round(inv/cpl):null; }
 function renderPlanoReal(){
   const el=document.getElementById("page-planoreal");if(!el)return;
   const today=todayISO();
@@ -1687,8 +1702,9 @@ function renderPlanoReal(){
   const rows=dias.map(d=>{
     const isFuture=d>today;
     const p=isFuture?null:periodPack(d,d);
-    return{date:d,isToday:d===today,isFuture,plan:planForDate(d),planLeads:planLeadsForDate(d),
-      real:isFuture?null:p.total.spend,leads:isFuture?null:p.cap.leads};
+    return{date:d,isToday:d===today,isFuture,plan:temLembrete()?planForDate(d,"captacao"):planForDate(d),planLeads:planLeadsForDate(d),
+      real:isFuture?null:(temLembrete()?p.cap.spend:p.total.spend),leads:isFuture?null:p.cap.leads,
+      planLem:planForDate(d,"lembrete"),realLem:isFuture?null:p.total.spend-p.cap.spend};
   });
   const ateHoje=rows.filter(r=>!r.isFuture);
   const sum=(arr,k)=>arr.reduce((a,r)=>a+(r[k]||0),0);
@@ -1702,7 +1718,7 @@ function renderPlanoReal(){
     <div class="hdr" style="margin-bottom:6px">
       <div>
         <div class="hdr-title">Planejado / Realizado</div>
-        <div class="hdr-sub">${CONFIG.planoFaixas?CONFIG.planoFaixas.map(f=>f.inicio===f.fim?`R$ ${fInt(f.diario)} em ${fDate(f.inicio)}`:`R$ ${fInt(f.diario)}/dia de ${fDate(f.inicio)} a ${fDate(f.fim)}`).join(" · "):CONFIG.planoDiario?`R$ ${CONFIG.planoDiario}/dia desde ${fDateBR(CONFIG.planoInicio)}`:`sem planejamento definido ainda · a partir de ${fDateBR(CONFIG.planoInicio)}`} · ${temWhats()?"investimento total (captação + WhatsApp)":"investimento total"} · leads da ${leadsFonte()} · atualizado em: ${S.updated||"—"}</div>
+        <div class="hdr-sub">${CONFIG.planoDias?`total R$ ${fInt(planRange(CONFIG.planoInicio,CONFIG.planoFim))} · captação ${fBRL(planRange(CONFIG.planoInicio,CONFIG.planoFim,"captacao"))} · lembrete ${fBRL(planRange(CONFIG.planoInicio,CONFIG.planoFim,"lembrete"))} (17→23/11)`:CONFIG.planoFaixas?CONFIG.planoFaixas.map(f=>f.inicio===f.fim?`R$ ${fInt(f.diario)} em ${fDate(f.inicio)}`:`R$ ${fInt(f.diario)}/dia de ${fDate(f.inicio)} a ${fDate(f.fim)}`).join(" · "):CONFIG.planoDiario?`R$ ${CONFIG.planoDiario}/dia desde ${fDateBR(CONFIG.planoInicio)}`:`sem planejamento definido ainda · a partir de ${fDateBR(CONFIG.planoInicio)}`} · ${temWhats()?"investimento total (captação + WhatsApp)":"investimento total"} · leads da ${leadsFonte()} · atualizado em: ${S.updated||"—"}</div>
       </div>
       <div style="display:flex;align-items:center;gap:16px">${statusLegend()}</div>
     </div>
@@ -1735,6 +1751,32 @@ function renderPlanoReal(){
         </tr></tfoot>
       </table>
     </div></div>
+    ${temLembrete()?(()=>{const lr=rows.filter(r=>r.planLem>0||(r.realLem||0)>0.005);
+      const tP=sum(lr,"planLem"), tR=sum(lr.filter(r=>!r.isFuture),"realLem"), tPH=sum(lr.filter(r=>!r.isFuture),"planLem");
+      return `<div class="section-lbl" style="margin-top:22px">Lembrete — campanhas com [LEMB] no nome</div>
+    <div class="g4" style="margin-bottom:14px">
+      ${kpiCard("Lembrete planejado",fBRL(tP),`${lr.length} dias · ${totPlan+tP?fPct(tP/(totPlan+tP)*100):"—"} da verba`)}
+      ${kpiCard("Lembrete realizado",fBRL(tR),`planejado até hoje: ${fBRL(tPH)}`,cor(tR,tPH),false,tR,tPH||null,true)}
+      ${kpiCard("Verba total planejada",fBRL(totPlan+tP),"captação + lembrete")}
+      ${kpiCard("Verba total realizada",fBRL(totReal+tR),`planejado até hoje: ${fBRL(totPlanHoje+tPH)}`,cor(totReal+tR,totPlanHoje+tPH),false,totReal+tR,(totPlanHoje+tPH)||null,true)}
+    </div>
+    <div class="cc" style="padding:0;overflow:hidden"><div style="overflow-x:auto">
+      <table>
+        <thead><tr><th>Data</th><th style="text-align:right">Investimento planejado</th><th style="text-align:right">Investimento realizado</th></tr></thead>
+        <tbody>
+          ${lr.map(r=>`<tr style="background:${r.isToday?"rgba(59,130,246,.08)":"transparent"}">
+            <td class="mono">${diaSemana(r.date)}, ${fDate(r.date)}${r.isToday?" 👈":""}</td>
+            ${td(fBRL(r.planLem))}
+            ${td(r.realLem==null?"—":fBRL(r.realLem),r.realLem==null?"var(--hint)":cor(r.realLem,r.planLem))}
+          </tr>`).join("")}
+        </tbody>
+        <tfoot><tr style="border-top:2px solid var(--border-h)">
+          <td style="font-weight:700;color:var(--text-strong)">Total</td>
+          <td class="mono" style="text-align:right;font-weight:700">${fBRL(tP)}</td>
+          <td class="mono" style="text-align:right;font-weight:700">${fBRL(tR)}</td>
+        </tr></tfoot>
+      </table>
+    </div></div>`;})():""}
     ${foot("Planejado × Realizado")}`;
   requestAnimationFrame(()=>{ const h=[...el.querySelectorAll("tbody tr")].find(tr=>tr.textContent.includes("👈")); });
 }
@@ -1764,14 +1806,17 @@ function renderResumo(){
   ].filter(b=>resumoBlocos().includes(b.key));
   // Leads orgânicas de cada bloco (só quando a dash separa canais)
   const rng={tot:[S.startDate,S.endDate],edicao:[edIni,today],ontem:[yest,yest],hoje:[today,today]};
-  for(const b of blocks){ const [a,z]=rng[b.key]; b.org=temCanais()?filterLeads({start:a,end:z,canal:"organico"}).length:0; b.seg=temSegAlunos()?segPack(a,z):null; }
+  for(const b of blocks){ const [a,z]=rng[b.key]; b.org=temCanais()?filterLeads({start:a,end:z,canal:"organico"}).length:0; b.seg=temSegAlunos()?segPack(a,z):null;
+    const za=b.key==="tot"?(S.endDate<realToday?S.endDate:realToday):z;
+    b.planLem=temLembrete()?planRange(a>CONFIG.planoInicio?a:CONFIG.planoInicio,za,"lembrete"):0; }
   const fmtRow=(v,k,fmt)=>`${v==null?"—":fmt(v)}${M(k)!=null?`\t${metaEmoji(k,v)} (🎯 ${fmt(M(k))})`:""}`;
   // Modelo só captação (sem WhatsApp e sem o subtítulo "Página de captura")
   function textBlockCap(b){
     const {p,plan}=b;
     return `${b.txt}${b.key==="tot"?"\t":""}
 
-Investimento total:\t${fBRL(p.total.spend)}\t(plan.: ${fBRL(plan)})
+Investimento total:\t${fBRL(p.total.spend)}\t(plan.: ${fBRL(plan)})${temLembrete()?`
+Investimento lembrete:\t${fBRL(p.total.spend-p.cap.spend)}\t(plan.: ${fBRL(b.planLem)})`:""}
 
 Investimento:\t${fBRL(p.cap.spend)}
 Leads:\t${temLeads()?fInt(p.cap.leads):"—"}
@@ -1811,7 +1856,8 @@ Connect Rate:\t${fmtRow(p.cap.connectRate,"connectRate",fPct)}`;
     const {p,plan}=b;
     return `${b.txt}${b.key==="tot"?"\t":b.key==="edicao"?`\t${fDate(edIni)} a ${fDate(today)}`:""}
 
-Investimento total:\t${fBRL(p.total.spend)}\t(plan.: ${fBRL(plan)})
+Investimento total:\t${fBRL(p.total.spend)}\t(plan.: ${fBRL(plan)})${temLembrete()?`
+Investimento lembrete:\t${fBRL(p.total.spend-p.cap.spend)}\t(plan.: ${fBRL(b.planLem)})`:""}
 
 📥 Página de captura
 Investimento:\t${fBRL(p.cap.spend)}
