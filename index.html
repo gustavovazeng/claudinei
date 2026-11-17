@@ -260,6 +260,8 @@ const DASHES = {
   black:{
     id:"black",
     nome:"Black Nov/26",
+    slug:"black_nov26",
+    abaLembrete:"Base lembrete", // mídia das campanhas de lembrete ([LEMB]) — mesmas colunas da Base meta
     status:"ativo",
     sheetId:"1q-lak766-plDKiUweUNl4WkLcWGZKijHOXkYqREWE18",
     abaMeta:"Base meta",
@@ -327,6 +329,8 @@ const COLS = {
   reach:["Reach"],
   leads:["Action FB Pixel Lead (Offsite Conversion)","Action Leads","Leads","Action Lead"],
   lpv:["Action Landing Page View","Landing Page Views"],
+  video75:["Video 75 Percent Watched Actions","Action Video 75 Percent Watched","Video 75% Watched"],
+  view3s:["Action 3s Video Views","Action Video View","3-Second Video Plays"],
   adId:["Ad ID"], adName:["Ad Name"], igUrl:["Instagram Permalink URL"],
   adsetName:["Adset Name"], campId:["Campaign ID"], campName:["Campaign Name"],
 };
@@ -531,6 +535,30 @@ function canalDe(v){ v=String(v||"").trim().toLowerCase().normalize("NFD").repla
 // Público pela temperatura da campanha: QUENTE = alunos, FRIO = não alunos.
 function segPublico(t){ return t==="Quente"?"alunos":t==="Frio"?"nao":""; }
 function temLembrete(){ return !!CONFIG.planoLembrete; }
+// ── Resumo Lembrete (campanhas [LEMB] da Base meta) ─────────────────────────
+// Alcance não vem da API: é digitado na tela e fica salvo neste navegador.
+function alcanceKey(){ return `dashClaudinei.${CONFIG.id}.alcanceLembrete`; }
+function getAlcanceLembrete(){ try{ const v=parseFloat(localStorage.getItem(alcanceKey())); return v>0?v:null; }catch(_){ return null; } }
+function setAlcanceLembrete(v){
+  const n=parseFloat(String(v||"").replace(/[^\d,.-]/g,"").replace(/\./g,"").replace(",","."));
+  try{ if(n>0)localStorage.setItem(alcanceKey(),String(n)); else localStorage.removeItem(alcanceKey()); }catch(_){}
+  S.alcanceLembMem=n>0?n:null; renderResumo();
+}
+function alcanceLembrete(){ return getAlcanceLembrete()??S.alcanceLembMem??null; }
+function lembVideo(){ return !!(S.lembInfo&&S.lembInfo.video); }
+function lembretePack(){
+  const lr=S.rows.filter(r=>r.tipo==="lembrete");
+  const planDias=Object.keys(CONFIG.planoLembrete||{}).sort();
+  const ini=[lr.map(r=>r.date).sort()[0],planDias[0]].filter(Boolean).sort()[0]||todayISO();
+  const fim=todayISO();
+  const rs=lr.filter(r=>r.date>=ini&&r.date<=fim);
+  const sm=k=>rs.reduce((a,r)=>a+(r[k]||0),0);
+  const spend=sm("spend"), clicks=sm("clicks"), impressions=sm("impressions"), video75=sm("video75"), view3s=sm("view3s");
+  const alcance=alcanceLembrete();
+  return{ini,fim,linhas:rs.length,spend,clicks,impressions,video75,view3s,alcance,
+    cpc:clicks?spend/clicks:null, freq:alcance&&impressions?impressions/alcance:null,
+    tx75:lembVideo()&&view3s?video75/view3s*100:null, cptx75:lembVideo()&&video75?spend/video75:null};
+}
 function temSegAlunos(){ return CONFIG.segAlunos===true; }
 // Investimento/leads (tráfego)/CPL por público num período + Tx alunos/não alunos (sobre as leads de tráfego classificadas).
 function segPack(start,end){
@@ -662,11 +690,12 @@ function parseLeadsPixel(table){
 async function loadData(){
   const meuS=S, meuCfg=CONFIG;
   S.buscando=true; S.loading=true; S.error=null; render();
-  let metaCsv=null, leadsRes=null, erroFetch=null;
+  let metaCsv=null, leadsRes=null, lembRes=null, erroFetch=null;
   try{
-    [metaCsv,leadsRes]=await Promise.all([
+    [metaCsv,leadsRes,lembRes]=await Promise.all([
       fetchSheetCSV(CONFIG.abaMeta),
       CONFIG.abaLeads?fetchSheetCSV(CONFIG.abaLeads).then(t=>({ok:true,t}),e=>({ok:false,e})):Promise.resolve(null),
+      CONFIG.abaLembrete?fetchSheetCSV(CONFIG.abaLembrete).then(t=>({ok:true,t}),e=>({ok:false,e})):Promise.resolve(null),
     ]);
   }catch(e){ erroFetch=e; }
   // O usuário pode ter trocado de dash enquanto carregava: processa no estado
@@ -682,30 +711,22 @@ async function loadData(){
     }else if(leadsRes){ S.leadsError=String(leadsRes.e&&leadsRes.e.message||leadsRes.e); console.error(leadsRes.e); }
     const table=parseCSVText(metaCsv);
     if(table.length<1) throw new Error(`A aba "${CONFIG.abaMeta}" veio vazia.`);
-    const headers=table[0].map(h=>h.trim());
-    const idx={};
-    for(const k in COLS){ const name=colKey(headers,k); idx[k]=name?headers.indexOf(name):-1; }
-    S.has={leads:idx.leads>=0, impressions:idx.impressions>=0, reach:idx.reach>=0, lpv:idx.lpv>=0};
-    const get=(r,k)=>idx[k]>=0?(r[idx[k]]||"").trim():"";
-    const rows=[];
-    for(const r of table.slice(1)){
-      const date=toISO(get(r,"date")); if(!date)continue;
-      const campName=get(r,"campName");
-      rows.push({
-        date, campName, campId:get(r,"campId"), adsetName:get(r,"adsetName"),
-        adId:get(r,"adId"), adName:get(r,"adName")||"(sem nome)", igUrl:get(r,"igUrl"),
-        spend:parseNum(get(r,"spend")),
-        clicks:parseNum(get(r,"clicks")),
-        impressions:parseNum(get(r,"impressions")),
-        reach:parseNum(get(r,"reach")),
-        leadsGer:parseNum(get(r,"leads")), // leads do gerenciador (pixel) — só referência
-        lpv:parseNum(get(r,"lpv")),
-        tipo:campaignTipo(campName),
-        temp:campaignTemperature(campName),
-      });
-      const _r=rows[rows.length-1];
-      _r.campKey=campKeyOf(_r.campId,_r.campName); _r.adKey=campKeyOf(_r.adId,_r.adName);
-    }
+    const {rows:metaRows,has}=linhasMidia(table);
+    S.has=has;
+    let rows=metaRows;
+    // Base lembrete (aba própria): entram só as linhas de campanhas [LEMB].
+    // (Se a aba não existir, o Sheets pode devolver outra aba — o filtro por
+    // [LEMB] evita contar a captação em dobro.) Com a aba carregada, linhas
+    // [LEMB] que porventura estejam na Base meta são ignoradas.
+    S.lembInfo={aba:false,linhas:0,video:false,erro:null};
+    if(lembRes&&lembRes.ok){
+      const lt=parseCSVText(lembRes.t);
+      if(lt.length>1){
+        const L=linhasMidia(lt), lemb=L.rows.filter(r=>r.tipo==="lembrete");
+        if(lemb.length){ rows=rows.filter(r=>r.tipo!=="lembrete").concat(lemb); S.lembInfo={aba:true,linhas:lemb.length,video:L.has.video,erro:null}; }
+      }
+    }else if(lembRes){ S.lembInfo.erro=String(lembRes.e&&lembRes.e.message||lembRes.e); }
+    if(!S.lembInfo.aba){ S.lembInfo.linhas=rows.filter(r=>r.tipo==="lembrete").length; S.lembInfo.video=has.video; }
     S.rows=rows;
     ligaLeadsMidia();
     S.dates=[...new Set([...rows.map(r=>r.date),...S.leads.map(l=>l.date)])].sort();
@@ -725,6 +746,36 @@ async function loadData(){
   S.loading=false; S.carregado=true; S.buscando=false;
   S=naTela.S; CONFIG=naTela.CONFIG;
   render();
+}
+
+// Lê uma aba de mídia (Base meta / Base lembrete) → linhas por anúncio/dia.
+function linhasMidia(table){
+    const headers=table[0].map(h=>h.trim());
+  const idx={};
+  for(const k in COLS){ const name=colKey(headers,k); idx[k]=name?headers.indexOf(name):-1; }
+  const has={leads:idx.leads>=0, impressions:idx.impressions>=0, reach:idx.reach>=0, lpv:idx.lpv>=0, video:idx.video75>=0&&idx.view3s>=0};
+  const get=(r,k)=>idx[k]>=0?(r[idx[k]]||"").trim():"";
+  const rows=[];
+  for(const r of table.slice(1)){
+    const date=toISO(get(r,"date")); if(!date)continue;
+    const campName=get(r,"campName");
+    rows.push({
+      date, campName, campId:get(r,"campId"), adsetName:get(r,"adsetName"),
+      adId:get(r,"adId"), adName:get(r,"adName")||"(sem nome)", igUrl:get(r,"igUrl"),
+      spend:parseNum(get(r,"spend")),
+      clicks:parseNum(get(r,"clicks")),
+      impressions:parseNum(get(r,"impressions")),
+      reach:parseNum(get(r,"reach")),
+      leadsGer:parseNum(get(r,"leads")), // leads do gerenciador (pixel) — só referência
+      lpv:parseNum(get(r,"lpv")),
+      video75:parseNum(get(r,"video75")), view3s:parseNum(get(r,"view3s")),
+      tipo:campaignTipo(campName),
+      temp:campaignTemperature(campName),
+    });
+    const _r=rows[rows.length-1];
+    _r.campKey=campKeyOf(_r.campId,_r.campName); _r.adKey=campKeyOf(_r.adId,_r.adName);
+  }
+  return{rows,has};
 }
 
 // ── Métricas ──────────────────────────────────────────────────────────────
@@ -1964,7 +2015,61 @@ CPC:\t${fmtRow(p.wa.cpc,"cpcWhats",fBRL)}`;
         <pre style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text);white-space:pre-wrap;tab-size:2;line-height:1.8;margin:0;user-select:all">${esc(resumoText)}</pre>
       </div>
     </div>
+    ${temLembrete()?resumoLembreteHtml():""}
     ${foot("Resumo diário")}`;
+}
+function resumoLembreteText(L){
+  const n2=v=>v==null?"—":v.toFixed(2).replace(".",",");
+  return `*${CONFIG.slug||CONFIG.nome} - Resumo Lembrete*
+
+${fDateBR(L.ini)}\t${fDateBR(L.fim)}
+
+-> Total
+Investido total: ${fBRL(L.spend)}\t
+Cliques\t${fInt(L.clicks)}\t
+CPC:\t${fBRLOrDash(L.cpc)}\t
+
+*Investimento Facebook:*\t${fBRL(L.spend)}\t
+Link clicks:\t${fInt(L.clicks)}
+
+Meta CPC:\t${fBRLOrDash(L.cpc)}\t
+Alcance:\t${L.alcance?fInt(L.alcance):"—"}
+Facebook Frequência:\t${n2(L.freq)}\t
+
+Facebook Tx 75%: ${fPctOrDash(L.tx75)}\t
+Facebook Cptx75%:\t${fBRLOrDash(L.cptx75)}`;
+}
+function resumoLembreteHtml(){
+  const L=lembretePack(), txt=resumoLembreteText(L);
+  const el=document.getElementById("page-resumo"); if(el)el._lembText=txt;
+  const n2=v=>v==null?"—":v.toFixed(2).replace(".",",");
+  const r=(l,v,extra="")=>`<div style="display:grid;grid-template-columns:200px 1fr auto;gap:8px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.04);align-items:center">
+      <span style="color:var(--muted);font-size:12px">${l}</span><span style="font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--text-strong)">${v}</span><span style="font-size:10px;color:var(--hint)">${extra}</span></div>`;
+  const card=(t,body)=>`<div style="background:var(--card);border:1px solid var(--border);border-radius:14px;padding:20px;margin-bottom:14px">
+      <div style="font-size:13px;font-weight:700;color:var(--text-strong);margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid var(--border)">${t}</div>${body}</div>`;
+  const inp=`<input type="text" inputmode="numeric" placeholder="inserir manualmente" value="${L.alcance?fInt(L.alcance):""}" onchange="setAlcanceLembrete(this.value)"
+      style="background:transparent;border:none;border-bottom:1px solid var(--border-h);color:var(--text-strong);font-family:'JetBrains Mono',monospace;font-size:13px;padding:4px 0;width:100%;outline:none"/>`;
+  return `<div style="margin-top:28px;padding-top:22px;border-top:1px solid var(--border)">
+    <div class="hdr" style="margin-bottom:14px">
+      <div>
+        <div class="hdr-title" style="font-size:16px">🔔 Resumo Lembrete</div>
+        <div class="hdr-sub">campanhas com [LEMB] no nome · ${fDateBR(L.ini)} → ${fDateBR(L.fim)} · ${L.linhas} linha(s) na ${S.lembInfo&&S.lembInfo.aba?esc(CONFIG.abaLembrete):"Base meta"}${S.lembInfo&&S.lembInfo.erro?` · ⚠️ aba "${esc(CONFIG.abaLembrete)}" não carregou`:""}</div>
+      </div>
+      <button onclick="copyText(document.getElementById('page-resumo')._lembText,'.btn-copy-lemb')" class="btn-copy-lemb" style="display:inline-flex;align-items:center;gap:6px;padding:8px 18px;background:rgba(59,130,246,.18);border:1px solid rgba(96,165,250,.35);color:#93c5fd;border-radius:9px;font-size:12px;font-weight:600;cursor:pointer">📋 Copiar resumo</button>
+    </div>
+    ${lembVideo()?"":`<div class="notice" style="margin-bottom:12px">A aba ${esc(CONFIG.abaLembrete||"Base meta")} ainda não tem as colunas <b>Video 75 Percent Watched Actions</b> e <b>Action 3s Video Views</b> — Tx 75% e Custo por Tx 75% ficam "—" até elas entrarem.</div>`}
+    <div style="display:grid;grid-template-columns:1fr 420px;gap:20px;align-items:start">
+      <div>
+        ${card("Total",r("Investimento total",fBRL(L.spend))+r("Cliques",fInt(L.clicks))+r("CPC",fBRLOrDash(L.cpc)))}
+        ${card("Facebook",r("Investimento",fBRL(L.spend))+r("Cliques",fInt(L.clicks))+r("CPC",fBRLOrDash(L.cpc))
+          +r("Alcance",inp,"manual 🔧 (API não fornece)")+r("Frequência",n2(L.freq),"impressões ÷ alcance")
+          +r("Tx 75%",fPctOrDash(L.tx75),"75% assistido ÷ views 3s")+r("Custo por Tx 75%",fBRLOrDash(L.cptx75),"investimento ÷ 75% assistido"))}
+      </div>
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:14px;padding:24px">
+        <pre style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text);white-space:pre-wrap;tab-size:2;line-height:1.8;margin:0;user-select:all">${esc(txt)}</pre>
+      </div>
+    </div>
+  </div>`;
 }
 
 // ── Main render ───────────────────────────────────────────────────────────
